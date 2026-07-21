@@ -1,0 +1,143 @@
+@import "tailwindcss";
+
+:root {
+  --surface-0: #ffffff;
+  --surface-1: #f8fafc;
+  --surface-2: #ffffff;
+  --text-primary: #0f172a;
+  --text-secondary: #64748b;
+  --text-muted: #94a3b8;
+  --border: #e2e8f0;
+  --border-strong: #cbd5e1;
+
+  --bg-accent: #dbeafe;
+  --text-accent: #1d4ed8;
+  --border-accent: #3b82f6;
+  --fill-accent: #3b82f6;
+  --on-accent: #ffffff;
+
+  --bg-success: #dcfce7;
+  --text-success: #15803d;
+  --fill-success: #22c55e;
+
+  --bg-warning: #fef3c7;
+  --text-warning: #b45309;
+  --fill-warning: #f59e0b;
+
+  --bg-danger: #fef2f2;
+  --text-danger: #dc2626;
+  --border-danger: #fca5a5;
+  --fill-danger: #ef4444;
+  --on-danger: #ffffff;
+
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface-0: #020617;
+    --surface-1: #0f172a;
+    --surface-2: #1e293b;
+    --text-primary: #f1f5f9;
+    --text-secondary: #94a3b8;
+    --text-muted: #64748b;
+    --border: #1e293b;
+    --border-strong: #334155;
+
+    --bg-accent: #1e3a5f;
+    --text-accent: #60a5fa;
+    --border-accent: #3b82f6;
+
+    --bg-success: #14532d;
+    --text-success: #4ade80;
+
+    --bg-warning: #451a03;
+    --text-warning: #fbbf24;
+
+    --bg-danger: #2a1414;
+    --text-danger: #f87171;
+    --border-danger: #7f1d1d;
+  }
+}
+
+/* Manual theme override (Settings > Theme). Attribute selectors outrank the
+   plain :root rules above regardless of source order, so these win whether
+   the OS is light or dark. */
+:root[data-theme="dark"] {
+  --surface-0: #020617;
+  --surface-1: #0f172a;
+  --surface-2: #1e293b;
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --border: #1e293b;
+  --border-strong: #334155;
+
+  --bg-accent: #1e3a5f;
+  --text-accent: #60a5fa;
+  --border-accent: #3b82f6;
+
+  --bg-success: #14532d;
+  --text-success: #4ade80;
+
+  --bg-warning: #451a03;
+  --text-warning: #fbbf24;
+
+  --bg-danger: #2a1414;
+  --text-danger: #f87171;
+  --border-danger: #7f1d1d;
+}
+
+:root[data-theme="light"] {
+  --surface-0: #ffffff;
+  --surface-1: #f8fafc;
+  --surface-2: #ffffff;
+  --text-primary: #0f172a;
+  --text-secondary: #64748b;
+  --text-muted: #94a3b8;
+  --border: #e2e8f0;
+  --border-strong: #cbd5e1;
+
+  --bg-accent: #dbeafe;
+  --text-accent: #1d4ed8;
+  --border-accent: #3b82f6;
+
+  --bg-success: #dcfce7;
+  --text-success: #15803d;
+
+  --bg-warning: #fef3c7;
+  --text-warning: #b45309;
+
+  --bg-danger: #fef2f2;
+  --text-danger: #dc2626;
+  --border-danger: #fca5a5;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  background: var(--surface-0);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  cursor: pointer;
+  font-family: inherit;
+}
+
+input,
+select {
+  font-family: inherit;
+}
