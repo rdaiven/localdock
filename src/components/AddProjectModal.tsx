@@ -29,6 +29,7 @@ export function AddProjectModal({ onClose }: { onClose: () => void }) {
   const addProject = useProjectsStore((s) => s.addProject);
 
   useEffect(() => {
+    let cancelled = false;
     let unlisten: (() => void) | undefined;
     getCurrentWebview()
       .onDragDropEvent((event) => {
@@ -43,12 +44,21 @@ export function AddProjectModal({ onClose }: { onClose: () => void }) {
         }
       })
       .then((fn) => {
+        // The modal may have already unmounted by the time this IPC round
+        // trip resolves — unlisten immediately instead of leaking it.
+        if (cancelled) {
+          fn();
+          return;
+        }
         unlisten = fn;
       })
       .catch(() => {
         // drag-drop events aren't available outside a real Tauri window (e.g. plain browser preview)
       });
-    return () => unlisten?.();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

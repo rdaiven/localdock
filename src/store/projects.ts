@@ -6,6 +6,7 @@ import {
   isProcessRunning,
   onProcessExited,
   onProcessLog,
+  portBelongsToProject,
   startProcess,
   stopProcess,
 } from "../lib/processApi";
@@ -130,6 +131,22 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
     const project = get().projects.find((p) => p.id === id);
     if (!project) return;
 
+    // Check for a real port conflict before even attempting to spawn — we
+    // haven't started our own process yet, so any existing listener here is
+    // by definition someone else's, and this is the one point in the flow
+    // where "port already in use" can be reported precisely instead of
+    // falling through to a generic spawn/crash error later.
+    const preOwner = await checkPort(project.port).catch(() => null);
+    if (preOwner) {
+      set((state) => ({
+        projects: state.projects.map((p) =>
+          p.id === id ? { ...p, status: "needs-attention", attentionReason: "port-conflict" } : p,
+        ),
+      }));
+      logActivity(set, id, `Port ${project.port} is already in use by "${preOwner.name}"`);
+      return;
+    }
+
     set((state) => ({
       projects: state.projects.map((p) =>
         p.id === id ? { ...p, status: "starting", attentionReason: undefined } : p,
@@ -156,8 +173,10 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
       await new Promise((r) => setTimeout(r, 400));
       const current = get().projects.find((p) => p.id === id);
       if (!current || current.status !== "starting") return; // superseded by a crash event or manual stop
-      const owner = await checkPort(current.port).catch(() => null);
-      if (owner) {
+      // Job-scoped check: is *our* spawned process (or something it forked)
+      // the thing bound to this port, not just any process anywhere.
+      const owned = await portBelongsToProject(id, current.port).catch(() => false);
+      if (owned) {
         bound = true;
         break;
       }
@@ -236,7 +255,11 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
       try {
         await stopProcess(id);
       } catch (err) {
-        logActivity(set, id, `Couldn't stop cleanly: ${String(err)}`);
+        // Kill failed — leave status untouched (still accurately "running"),
+        // don't claim success. The backend also leaves the process tracked
+        // on this path, so retrying Stop can still find and kill it.
+        logActivity(set, id, `Couldn't stop: ${String(err)}`);
+        return;
       }
       set((state) => ({
         projects: state.projects.map((p) =>

@@ -34,6 +34,8 @@ pub fn run() {
             process_manager::start_process,
             process_manager::stop_process,
             process_manager::is_process_running,
+            process_manager::list_running_processes,
+            process_manager::port_belongs_to_project,
             ports::check_port,
             ide::detect_ides,
             ide::open_in_ide,

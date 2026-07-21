@@ -34,8 +34,18 @@ export async function isProcessRunning(projectId: string): Promise<boolean> {
   return invoke<boolean>("is_process_running", { projectId });
 }
 
+export async function listRunningProcesses(): Promise<string[]> {
+  return invoke<string[]>("list_running_processes");
+}
+
 export async function checkPort(port: number): Promise<PortOwner | null> {
   return invoke<PortOwner | null>("check_port", { port });
+}
+
+/** True only if `port` is bound by the process (or a descendant) LocalDock
+ * itself spawned for `projectId` — not just "some process is using it". */
+export async function portBelongsToProject(projectId: string, port: number): Promise<boolean> {
+  return invoke<boolean>("port_belongs_to_project", { projectId, port });
 }
 
 export function onProcessLog(callback: (event: ProcessLogEvent) => void): Promise<UnlistenFn> {

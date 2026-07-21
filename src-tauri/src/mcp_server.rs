@@ -87,7 +87,7 @@ impl LocalDockMcp {
     #[tool(description = "Check whether a TCP port is currently bound on this machine, and by which process.")]
     fn check_port_tool(&self, Parameters(PortRequest { port }): Parameters<PortRequest>) -> String {
         match check_port(port) {
-            Some(_owner) => format!("Port {port} is currently in use."),
+            Some(owner) => format!("Port {port} is in use by \"{}\" (pid {}).", owner.name, owner.pid),
             None => format!("Port {port} is free."),
         }
     }
