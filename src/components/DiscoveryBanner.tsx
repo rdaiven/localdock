@@ -19,9 +19,17 @@ export function DiscoveryBanner({ onAdd }: { onAdd: (path: string, port: number)
         >
           <div className="flex items-center gap-2">
             <RadarIcon size={13} className="c-accent" aria-hidden="true" />
-            <p className="t-eyebrow c-accent">
+            <p className="t-eyebrow c-accent grow">
               {discovered.length} running {discovered.length === 1 ? "server" : "servers"} not in your list
             </p>
+            <button
+              aria-label="Hide all"
+              title="Hide all"
+              onClick={() => discovered.forEach((s) => dismissDiscovered(s.pid))}
+              className="icon-btn icon-btn--sm icon-btn--bare shrink-0"
+            >
+              <X size={13} aria-hidden="true" />
+            </button>
           </div>
           <div className="flex-col gap-1">
             <AnimatePresence initial={false}>

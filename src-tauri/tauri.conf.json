@@ -26,7 +26,11 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
+    "publisher": "Daiven Reyes",
+    "shortDescription": "Local dev-server control panel",
+    "longDescription": "Start, stop, and monitor your local dev servers from one dashboard, with MCP support for AI assistants.",
+    "copyright": "© 2026 Daiven Reyes",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
