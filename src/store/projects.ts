@@ -10,67 +10,12 @@ import {
   startProcess,
   stopProcess,
 } from "../lib/processApi";
+import { loadProjects as loadPersistedProjects, saveProjects } from "../lib/projectsStorage";
+import { scanRunningDevServers, type DiscoveredServer } from "../lib/discoverApi";
 
-const initialProjects: Project[] = [
-  {
-    id: "portfolio",
-    name: "My portfolio site",
-    framework: "Next.js",
-    port: 3000,
-    status: "running",
-    addedBy: "Claude Code",
-    startCommand: "npm run dev",
-    workingDir: "D:\\Projects\\portfolio",
-  },
-  {
-    id: "client-api",
-    name: "Client API",
-    framework: "Laravel",
-    port: 8000,
-    status: "stopped",
-    startCommand: "php artisan serve",
-    workingDir: "D:\\Projects\\client-api",
-  },
-  {
-    id: "recipe-app",
-    name: "Recipe app",
-    framework: "React",
-    port: 5175,
-    status: "stopped",
-    startCommand: "node demo-recipe-server.js",
-    workingDir: "C:\\Users\\devri\\Desktop\\LocalDock",
-  },
-  {
-    id: "old-blog",
-    name: "Old blog",
-    framework: "WordPress",
-    port: 8000,
-    status: "needs-attention",
-    attentionReason: "port-conflict",
-    startCommand: "php -S localhost:8000",
-    workingDir: "D:\\Projects\\old-blog",
-  },
-  {
-    id: "weather-widget",
-    name: "Weather widget",
-    framework: "Python",
-    port: 8001,
-    status: "needs-attention",
-    attentionReason: "missing-deps",
-    startCommand: "python app.py",
-    workingDir: "D:\\Projects\\weather-widget",
-  },
-  {
-    id: "internal-dashboard",
-    name: "Internal dashboard",
-    framework: "Node",
-    port: 4000,
-    status: "needs-attention",
-    attentionReason: "missing-env",
-    startCommand: "npm run dev",
-    workingDir: "D:\\Projects\\internal-dashboard",
-  },
-];
+function normalizePath(p: string): string {
+  return p.trim().toLowerCase().replace(/\\+$/, "");
+}
 
 interface ProjectsState {
   projects: Project[];
@@ -80,13 +25,20 @@ interface ProjectsState {
   search: string;
   sortBy: SortKey;
   eventsInitialized: boolean;
+  projectsLoaded: boolean;
+  discovered: DiscoveredServer[];
+  discoveryScanning: boolean;
+  loadProjects: () => Promise<void>;
   initProcessEvents: () => void;
   reconcileWithBackend: () => Promise<void>;
+  scanForServers: () => Promise<void>;
+  dismissDiscovered: (pid: number) => void;
   select: (id: string) => void;
   setSearch: (query: string) => void;
   setSortBy: (key: SortKey) => void;
   start: (id: string) => Promise<void>;
-  stop: (id: string) => Promise<void>;
+  /** Resolves true only if the process was actually stopped (or wasn't running). */
+  stop: (id: string) => Promise<boolean>;
   cancelStart: (id: string) => Promise<void>;
   addProject: (input: {
     name: string;
@@ -98,6 +50,9 @@ interface ProjectsState {
   updatePort: (id: string, port: number) => void;
   updateFramework: (id: string, framework: string) => void;
   updateStartCommand: (id: string, command: string) => void;
+  renameProject: (id: string, name: string) => void;
+  togglePin: (id: string) => void;
+  removeProject: (id: string) => Promise<void>;
   useFreePort: (id: string) => void;
   installAndRetry: (id: string) => Promise<void>;
   retryWithCommand: (id: string, command: string) => Promise<void>;
@@ -127,6 +82,17 @@ function nextFreePort(projects: Project[], from: number, excludeId: string): num
 }
 
 export const useProjectsStore = create<ProjectsState>((set, get) => {
+  let loadPromise: Promise<void> | null = null;
+
+  // Config-shape changes (added/edited projects) are persisted to disk so
+  // they survive an app restart — runtime state like status/activity/logs
+  // stays in memory only, since nothing is actually running on a fresh launch.
+  // saveProjects serializes/coalesces overlapping writes (jsonStorage.ts),
+  // so fire-and-forget at keystroke frequency is safe.
+  function persist() {
+    void saveProjects(get().projects).catch(() => {});
+  }
+
   async function performStart(id: string) {
     const project = get().projects.find((p) => p.id === id);
     if (!project) return;
@@ -195,13 +161,66 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
   }
 
   return {
-    projects: initialProjects,
+    projects: [],
     activity: [],
     consoleLogs: {},
-    selectedId: initialProjects[0]?.id ?? null,
+    selectedId: null,
     search: "",
     sortBy: "name",
     eventsInitialized: false,
+    projectsLoaded: false,
+    discovered: [],
+    discoveryScanning: false,
+
+    loadProjects: () => {
+      // Idempotent AND awaitable-while-in-flight: a second caller during the
+      // initial load gets the same promise instead of resolving early with
+      // the list still empty (scanForServers depends on this).
+      if (!loadPromise) {
+        loadPromise = (async () => {
+          const projects = await loadPersistedProjects();
+          set({ projectsLoaded: true, projects, selectedId: projects[0]?.id ?? null });
+        })();
+      }
+      return loadPromise;
+    },
+
+    // Best-effort: find dev servers running outside LocalDock's own control
+    // (started by hand, or by another tool's own shell instead of through
+    // our MCP tools) by reading their real working directory off their PEB.
+    // Matches against known projects just get an activity note (we can't
+    // safely adopt Start/Stop control over a process we didn't spawn);
+    // unmatched ones are surfaced as "want to add this?" suggestions.
+    scanForServers: async () => {
+      set({ discoveryScanning: true });
+      try {
+        // Matching below runs against get().projects — make sure the
+        // persisted list has actually loaded first, or every known
+        // project's own server would look like a brand-new discovery.
+        await get().loadProjects();
+        const found = await scanRunningDevServers();
+        const projects = get().projects;
+        const unmatched: DiscoveredServer[] = [];
+        for (const server of found) {
+          if (!server.cwd) continue;
+          const match = projects.find((p) => normalizePath(p.workingDir) === normalizePath(server.cwd!));
+          if (match) {
+            if (match.status !== "running" && match.status !== "starting") {
+              logActivity(set, match.id, `Detected already running externally on port ${server.port} (pid ${server.pid})`);
+            }
+          } else {
+            unmatched.push(server);
+          }
+        }
+        set({ discovered: unmatched });
+      } finally {
+        set({ discoveryScanning: false });
+      }
+    },
+
+    dismissDiscovered: (pid) => {
+      set((state) => ({ discovered: state.discovered.filter((d) => d.pid !== pid) }));
+    },
 
     initProcessEvents: () => {
       if (get().eventsInitialized) return;
@@ -259,7 +278,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
         // don't claim success. The backend also leaves the process tracked
         // on this path, so retrying Stop can still find and kill it.
         logActivity(set, id, `Couldn't stop: ${String(err)}`);
-        return;
+        return false;
       }
       set((state) => ({
         projects: state.projects.map((p) =>
@@ -267,6 +286,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
         ),
       }));
       logActivity(set, id, "Stopped");
+      return true;
     },
 
     cancelStart: async (id) => {
@@ -288,20 +308,62 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
       };
       set((state) => ({ projects: [...state.projects, project], selectedId: id }));
       logActivity(set, id, "Project added");
+      persist();
     },
 
     updatePort: (id, port) => {
       set((state) => ({ projects: state.projects.map((p) => (p.id === id ? { ...p, port } : p)) }));
+      persist();
     },
 
     updateFramework: (id, framework) => {
       set((state) => ({ projects: state.projects.map((p) => (p.id === id ? { ...p, framework } : p)) }));
+      persist();
     },
 
     updateStartCommand: (id, command) => {
       set((state) => ({
         projects: state.projects.map((p) => (p.id === id ? { ...p, startCommand: command } : p)),
       }));
+      persist();
+    },
+
+    renameProject: (id, name) => {
+      const trimmed = name.trim();
+      if (!trimmed) return;
+      set((state) => ({ projects: state.projects.map((p) => (p.id === id ? { ...p, name: trimmed } : p)) }));
+      persist();
+    },
+
+    togglePin: (id) => {
+      set((state) => ({
+        projects: state.projects.map((p) => (p.id === id ? { ...p, pinned: !p.pinned } : p)),
+      }));
+      persist();
+    },
+
+    removeProject: async (id) => {
+      const project = get().projects.find((p) => p.id === id);
+      if (!project) return;
+      if (project.status === "running" || project.status === "starting") {
+        // If the kill genuinely failed, removing the project would orphan a
+        // running process with no UI left to retry Stop on — keep the row.
+        const stopped = await get().stop(id);
+        if (!stopped) {
+          logActivity(set, id, "Not removed — the running process couldn't be stopped. Try Stop again first.");
+          return;
+        }
+      }
+      set((state) => {
+        const consoleLogs = { ...state.consoleLogs };
+        delete consoleLogs[id];
+        return {
+          projects: state.projects.filter((p) => p.id !== id),
+          consoleLogs,
+          selectedId: state.selectedId === id ? null : state.selectedId,
+        };
+      });
+      persist();
     },
 
     useFreePort: (id) => {
@@ -314,6 +376,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
         ),
       }));
       logActivity(set, id, `Port conflict resolved — moved to ${freePort}`);
+      persist();
     },
 
     installAndRetry: async (id) => {
@@ -326,6 +389,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
         projects: state.projects.map((p) => (p.id === id ? { ...p, startCommand: command } : p)),
       }));
       logActivity(set, id, `Start command updated to "${command}"`);
+      persist();
       await performStart(id);
     },
 
@@ -334,11 +398,17 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
         projects: state.projects.map((p) => (p.id === id ? { ...p, envVars: env } : p)),
       }));
       logActivity(set, id, `Settings saved (${Object.keys(env).length} values)`);
+      persist();
       await performStart(id);
     },
 
     restart: async (id) => {
-      await get().stop(id);
+      // A failed stop leaves the old process holding the port — starting on
+      // top of it would just produce a confusing port-conflict cascade.
+      const project = get().projects.find((p) => p.id === id);
+      if (project && (project.status === "running" || project.status === "starting")) {
+        if (!(await get().stop(id))) return;
+      }
       await performStart(id);
     },
   };
@@ -363,6 +433,7 @@ export function visibleProjects(state: ProjectsState): Project[] {
   };
 
   return [...filtered].sort((a, b) => {
+    if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
     if (state.sortBy === "name") return a.name.localeCompare(b.name);
     if (state.sortBy === "framework") return a.framework.localeCompare(b.framework);
     return statusOrder[a.status] - statusOrder[b.status];

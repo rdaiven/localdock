@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { motion } from "framer-motion";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { X, FolderOpen, Play, Square, ChevronDown, ChevronUp } from "lucide-react";
 import { useProjectsStore } from "../store/projects";
@@ -7,12 +8,6 @@ import { RECOVERY_CONFIG } from "../lib/recovery";
 import { FRAMEWORK_OPTIONS } from "../lib/detect";
 
 const EMPTY_LOGS: string[] = [];
-
-const inputStyle = {
-  background: "var(--surface-1)",
-  border: "0.5px solid var(--border)",
-  color: "var(--text-primary)",
-} as const;
 
 export function ProjectDetail({ projectId, onClose }: { projectId: string; onClose: () => void }) {
   const project = useProjectsStore((s) => s.projects.find((p) => p.id === projectId));
@@ -24,6 +19,7 @@ export function ProjectDetail({ projectId, onClose }: { projectId: string; onClo
   const updatePort = useProjectsStore((s) => s.updatePort);
   const updateFramework = useProjectsStore((s) => s.updateFramework);
   const updateStartCommand = useProjectsStore((s) => s.updateStartCommand);
+  const renameProject = useProjectsStore((s) => s.renameProject);
   const useFreePort = useProjectsStore((s) => s.useFreePort);
   const installAndRetry = useProjectsStore((s) => s.installAndRetry);
   const retryWithCommand = useProjectsStore((s) => s.retryWithCommand);
@@ -70,65 +66,62 @@ export function ProjectDetail({ projectId, onClose }: { projectId: string; onClo
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex justify-end"
-      style={{ background: "rgba(0,0,0,0.35)" }}
+    <motion.div
+      className="overlay"
       onClick={onClose}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.15 }}
     >
-      <div
-        className="flex h-full w-full max-w-sm flex-col p-5"
-        style={{ background: "var(--surface-2)", borderLeft: "0.5px solid var(--border)" }}
+      <motion.div
+        className="drawer"
         onClick={(e) => e.stopPropagation()}
+        initial={{ x: 24, opacity: 0 }}
+        animate={{ x: 0, opacity: 1 }}
+        exit={{ x: 24, opacity: 0 }}
+        transition={{ duration: 0.2, ease: "easeOut" }}
       >
-        <div className="mb-1 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="h-2 w-2 rounded-full" style={{ background: status.dot }} />
-            <span className="text-base font-medium">{project.name}</span>
+        <div className="flex items-center justify-between" style={{ marginBottom: 2 }}>
+          <div className="flex items-center gap-2 minw-0">
+            <span
+              className={`status-dot${isRunning ? " status-dot--live" : ""}`}
+              style={{ background: status.dot }}
+            />
+            <span className="t-title truncate">{project.name}</span>
           </div>
-          <button aria-label="Close" onClick={onClose} className="rounded-md p-1" style={{ background: "transparent", border: "none", color: "var(--text-muted)" }}>
+          <button aria-label="Close" onClick={onClose} className="icon-btn icon-btn--bare shrink-0">
             <X size={16} aria-hidden="true" />
           </button>
         </div>
-        <p className="mb-4 pl-4 text-xs" style={{ color: isDanger ? "var(--text-danger)" : "var(--text-secondary)" }}>
+        <p className={`t-micro ${isDanger ? "c-danger" : "c-secondary"}`} style={{ paddingLeft: 15, marginBottom: 16 }}>
           {project.framework} · {isDanger ? recovery?.subtitle : status.label}
         </p>
 
         {isDanger && recovery && (
-          <div className="mb-4 rounded-lg p-3" style={{ background: "var(--bg-danger)" }}>
-            <p className="mb-2.5 text-sm" style={{ color: "var(--text-danger)" }}>
-              {recovery.message}
-            </p>
+          <div className="notice notice--danger flex-col gap-2" style={{ marginBottom: 16 }}>
+            <p className="t-small c-danger">{recovery.message}</p>
 
             {project.attentionReason === "missing-env" ? (
-              <div className="flex flex-col gap-2">
+              <div className="flex-col gap-2">
                 <input
                   value={envDraft.DATABASE_URL}
                   onChange={(e) => setEnvDraft((d) => ({ ...d, DATABASE_URL: e.target.value }))}
                   placeholder="DATABASE_URL"
-                  className="h-8 rounded-md px-2 text-xs"
-                  style={{ ...inputStyle, fontFamily: "var(--font-mono)" }}
+                  className="field field--sm field--mono"
                 />
                 <input
                   value={envDraft.API_KEY}
                   onChange={(e) => setEnvDraft((d) => ({ ...d, API_KEY: e.target.value }))}
                   placeholder="API_KEY"
-                  className="h-8 rounded-md px-2 text-xs"
-                  style={{ ...inputStyle, fontFamily: "var(--font-mono)" }}
+                  className="field field--sm field--mono"
                 />
-                <button
-                  onClick={runFix}
-                  className="mt-1 rounded-md py-1.5 text-xs font-medium"
-                  style={{ background: "var(--fill-danger)", color: "var(--on-danger)", border: "none" }}
-                >
+                <button onClick={runFix} className="btn btn--sm btn--danger btn--block">
                   {recovery.fixLabel}
                 </button>
               </div>
             ) : (
-              <button
-                onClick={runFix}
-                className="rounded-md px-3 py-1.5 text-xs font-medium"
-                style={{ background: "var(--fill-danger)", color: "var(--on-danger)", border: "none" }}
-              >
+              <button onClick={runFix} className="btn btn--sm btn--danger" style={{ alignSelf: "flex-start" }}>
                 {recovery.fixLabel}
               </button>
             )}
@@ -136,31 +129,43 @@ export function ProjectDetail({ projectId, onClose }: { projectId: string; onClo
         )}
 
         {!isDanger && (
-          <button
+          <motion.button
             onClick={() => (isRunning ? stop(project.id) : isStarting ? undefined : start(project.id))}
             disabled={isStarting}
-            className="mb-4 flex items-center justify-center gap-2 rounded-lg py-2 text-sm font-medium disabled:opacity-60"
-            style={{ background: "var(--fill-accent)", color: "var(--on-accent)", border: "none" }}
+            whileTap={{ scale: 0.97 }}
+            className="btn btn--primary btn--block"
+            style={{ marginBottom: 16 }}
           >
             {isRunning ? <Square size={14} aria-hidden="true" /> : <Play size={14} aria-hidden="true" />}
             {isRunning ? "Stop" : isStarting ? "Starting…" : "Start"}
-          </button>
+          </motion.button>
         )}
 
-        <div className="flex flex-col gap-3 border-t pt-3 text-xs" style={{ borderColor: "var(--border)" }}>
+        <p className="t-eyebrow divider" style={{ marginBottom: 10 }}>
+          Configuration
+        </p>
+        <div className="flex-col gap-3">
+          <Row label="Name">
+            <input
+              value={project.name}
+              onChange={(e) => renameProject(project.id, e.target.value)}
+              className="field field--sm w-full"
+            />
+          </Row>
+
           <Row label="Port">
             <div className="flex items-center gap-2">
               <input
                 type="number"
                 value={project.port}
                 onChange={(e) => updatePort(project.id, Number(e.target.value))}
-                className="h-8 w-24 rounded-md px-2 text-xs"
-                style={inputStyle}
+                className="field field--sm field--mono"
+                style={{ width: 96 }}
               />
               {portConflict ? (
-                <span style={{ color: "var(--text-danger)" }}>In use by another project</span>
+                <span className="t-micro c-danger">In use by another project</span>
               ) : (
-                <span style={{ color: "var(--text-success)" }}>Available</span>
+                <span className="t-micro c-success">Available</span>
               )}
             </div>
           </Row>
@@ -169,10 +174,11 @@ export function ProjectDetail({ projectId, onClose }: { projectId: string; onClo
             <select
               value={project.framework}
               onChange={(e) => updateFramework(project.id, e.target.value)}
-              className="h-8 w-full rounded-md px-2 text-xs"
-              style={inputStyle}
+              className="field field--sm w-full"
             >
-              {FRAMEWORK_OPTIONS.includes(project.framework) ? null : <option value={project.framework}>{project.framework}</option>}
+              {FRAMEWORK_OPTIONS.includes(project.framework) ? null : (
+                <option value={project.framework}>{project.framework}</option>
+              )}
               {FRAMEWORK_OPTIONS.map((f) => (
                 <option key={f} value={f}>
                   {f}
@@ -183,16 +189,15 @@ export function ProjectDetail({ projectId, onClose }: { projectId: string; onClo
 
           <Row label="Working directory">
             <div className="flex items-center gap-2">
-              <span className="truncate" style={{ color: "var(--text-primary)" }} title={project.workingDir}>
+              <span className="truncate t-mono c-secondary" title={project.workingDir}>
                 {project.workingDir}
               </span>
               <button
                 aria-label="Open folder"
                 onClick={() => openPath(project.workingDir).catch(() => {})}
-                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md p-0"
-                style={{ background: "transparent", border: "0.5px solid var(--border)", color: "var(--text-secondary)" }}
+                className="icon-btn icon-btn--sm shrink-0"
               >
-                <FolderOpen size={13} aria-hidden="true" />
+                <FolderOpen size={12} aria-hidden="true" />
               </button>
             </div>
           </Row>
@@ -201,33 +206,28 @@ export function ProjectDetail({ projectId, onClose }: { projectId: string; onClo
             <input
               value={project.startCommand}
               onChange={(e) => updateStartCommand(project.id, e.target.value)}
-              className="h-8 w-full rounded-md px-2 text-xs"
-              style={{ ...inputStyle, fontFamily: "var(--font-mono)" }}
+              className="field field--sm field--mono w-full"
             />
           </Row>
         </div>
 
-        <div className="mt-4 border-t pt-3" style={{ borderColor: "var(--border)" }}>
+        <div className="divider" style={{ marginTop: 18 }}>
           <button
             onClick={() => setLogOpen((v) => !v)}
-            className="flex w-full items-center justify-between rounded-md p-0 text-xs"
-            style={{ background: "transparent", border: "none", color: "var(--text-muted)" }}
+            className="w-full flex items-center justify-between t-eyebrow"
+            style={{ padding: 0 }}
           >
-            <span>Activity · {projectActivity.length} events</span>
-            {logOpen ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
+            <span>Activity · {projectActivity.length}</span>
+            {logOpen ? <ChevronUp size={13} aria-hidden="true" /> : <ChevronDown size={13} aria-hidden="true" />}
           </button>
 
           {logOpen && (
-            <div className="mt-2 flex flex-col gap-1.5">
-              {projectActivity.length === 0 && (
-                <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-                  No activity yet.
-                </p>
-              )}
+            <div className="flex-col gap-1" style={{ marginTop: 10 }}>
+              {projectActivity.length === 0 && <p className="t-micro c-muted">No activity yet.</p>}
               {projectActivity.map((entry) => (
-                <div key={entry.id} className="flex items-baseline justify-between text-xs">
-                  <span style={{ color: "var(--text-secondary)" }}>{entry.message}</span>
-                  <span style={{ color: "var(--text-muted)" }}>
+                <div key={entry.id} className="flex items-baseline justify-between gap-3 t-micro">
+                  <span className="c-secondary">{entry.message}</span>
+                  <span className="t-mono c-muted shrink-0" style={{ fontSize: 10.5 }}>
                     {new Date(entry.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                   </span>
                 </div>
@@ -236,32 +236,23 @@ export function ProjectDetail({ projectId, onClose }: { projectId: string; onClo
           )}
         </div>
 
-        <div className="mt-3 border-t pt-3" style={{ borderColor: "var(--border)" }}>
+        <div className="divider">
           <button
             onClick={() => setConsoleOpen((v) => !v)}
-            className="flex w-full items-center justify-between rounded-md p-0 text-xs"
-            style={{ background: "transparent", border: "none", color: "var(--text-muted)" }}
+            className="w-full flex items-center justify-between t-eyebrow"
+            style={{ padding: 0 }}
           >
-            <span>Console output · {consoleLines.length} lines</span>
-            {consoleOpen ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
+            <span>Console · {consoleLines.length}</span>
+            {consoleOpen ? <ChevronUp size={13} aria-hidden="true" /> : <ChevronDown size={13} aria-hidden="true" />}
           </button>
 
           {consoleOpen && (
-            <div
-              className="mt-2 max-h-40 overflow-y-auto rounded-md p-2"
-              style={{ background: "var(--surface-1)", border: "0.5px solid var(--border)" }}
-            >
+            <div className="console">
               {consoleLines.length === 0 ? (
-                <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-                  No output yet.
-                </p>
+                <p className="t-micro c-muted">No output yet.</p>
               ) : (
                 consoleLines.map((line, i) => (
-                  <p
-                    key={i}
-                    className="whitespace-pre-wrap text-xs"
-                    style={{ color: "var(--text-secondary)", fontFamily: "var(--font-mono)" }}
-                  >
+                  <p key={i} className="pre-wrap t-mono c-secondary" style={{ fontSize: 11 }}>
                     {line}
                   </p>
                 ))
@@ -269,15 +260,15 @@ export function ProjectDetail({ projectId, onClose }: { projectId: string; onClo
             </div>
           )}
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 }
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <p className="mb-1" style={{ color: "var(--text-secondary)" }}>
+      <p className="t-micro c-secondary" style={{ marginBottom: 5 }}>
         {label}
       </p>
       {children}

@@ -70,3 +70,39 @@ pub fn open_in_ide(ide_path: String, project_dir: String) -> Result<(), String> 
         .map_err(|e| e.to_string())?;
     Ok(())
 }
+
+/// Open an interactive terminal in `project_dir` — Windows Terminal if it's
+/// installed (on PATH), otherwise a plain cmd.exe window.
+///
+/// The working directory is set through the process-spawn API, never
+/// interpolated into a command string: a folder name containing cmd.exe
+/// metacharacters (`&`, `^`, …) must stay data, not become shell input.
+#[tauri::command]
+pub fn open_terminal(project_dir: String) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+
+    let dir = std::path::Path::new(&project_dir);
+    if !dir.is_dir() {
+        return Err(format!("Not a folder: {project_dir}"));
+    }
+
+    // wt passes -d as a plain argv entry — no shell parsing involved.
+    if std::process::Command::new("wt")
+        .args(["-d", &project_dir])
+        .spawn()
+        .is_ok()
+    {
+        return Ok(());
+    }
+
+    // CREATE_NEW_CONSOLE so the fallback opens its own window even when the
+    // parent (a dev build) already owns a console.
+    std::process::Command::new("cmd")
+        .arg("/K")
+        .current_dir(dir)
+        .creation_flags(CREATE_NEW_CONSOLE)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}

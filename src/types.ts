@@ -18,6 +18,7 @@ export interface Project {
   addedBy?: string;
   startCommand: string;
   workingDir: string;
+  pinned?: boolean;
 }
 
 export interface ActivityEntry {

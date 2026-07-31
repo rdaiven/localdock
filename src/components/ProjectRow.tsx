@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   Folder,
   FolderOpen,
@@ -21,7 +22,7 @@ import { STATUS_CONFIG } from "../lib/status";
 import { RECOVERY_CONFIG } from "../lib/recovery";
 import { useProjectsStore } from "../store/projects";
 import { useSettingsStore } from "../store/settings";
-import { openInIde } from "../lib/settingsApi";
+import { openInIde, openTerminal } from "../lib/settingsApi";
 
 export function ProjectRow({
   project,
@@ -36,6 +37,8 @@ export function ProjectRow({
   const stop = useProjectsStore((s) => s.stop);
   const cancelStart = useProjectsStore((s) => s.cancelStart);
   const select = useProjectsStore((s) => s.select);
+  const togglePin = useProjectsStore((s) => s.togglePin);
+  const removeProject = useProjectsStore((s) => s.removeProject);
   const defaultIdeId = useSettingsStore((s) => s.defaultIdeId);
   const detectedIdes = useSettingsStore((s) => s.detectedIdes);
   const defaultIde = detectedIdes.find((ide) => ide.id === defaultIdeId);
@@ -62,8 +65,16 @@ export function ProjectRow({
     : isStarting
       ? "Starting up"
       : isRunning
-        ? `${project.framework} · localhost:${project.port}`
-        : `${project.framework} · port ${project.port}`;
+        ? `localhost:${project.port}`
+        : `port ${project.port}`;
+
+  const rowClass = [
+    "row-card",
+    selected && !isDanger ? "row-card--selected" : "",
+    isDanger ? "row-card--danger" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
     <div
@@ -71,67 +82,69 @@ export function ProjectRow({
         select(project.id);
         onOpenDetail();
       }}
-      className="flex cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2.5"
-      style={{
-        border: `0.5px solid ${isDanger ? "var(--border-danger)" : selected ? "var(--border-accent)" : "var(--border)"}`,
-        background: isDanger ? "var(--bg-danger)" : "var(--surface-2)",
-      }}
+      className={rowClass}
+      style={{ "--berth": status.dot } as React.CSSProperties}
     >
       <div
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
-        style={{
-          background: isDanger ? "var(--surface-2)" : isRunning ? "var(--bg-accent)" : "var(--surface-1)",
-          color: isDanger ? "var(--text-danger)" : isRunning ? "var(--text-accent)" : "var(--text-secondary)",
-        }}
+        className="tile"
+        style={
+          isDanger
+            ? { background: "var(--surface-2)", color: "var(--text-danger)" }
+            : isRunning
+              ? { background: "var(--bg-accent)", color: "var(--text-accent)" }
+              : undefined
+        }
       >
-        <Folder size={18} aria-hidden="true" />
+        <Folder size={17} aria-hidden="true" />
       </div>
 
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium" style={{ color: "var(--text-primary)" }}>
+      <div className="minw-0 grow">
+        <p className="truncate t-body c-primary" style={{ fontWeight: 500 }}>
           {project.name}
         </p>
-        <p
-          className="truncate text-xs"
-          style={{ color: isDanger ? "var(--text-danger)" : "var(--text-secondary)" }}
-        >
-          {subtitle}
+        <p className={`truncate t-micro ${isDanger ? "c-danger" : "c-secondary"}`}>
+          <span className="c-muted">{project.framework}</span>
+          {" · "}
+          <span className="t-mono" style={{ fontSize: 11 }}>
+            {subtitle}
+          </span>
           {project.addedBy && (
             <>
               {" · "}
-              <Sparkles size={11} className="inline -translate-y-px" aria-hidden="true" />
-              {` Added by ${project.addedBy}`}
+              <Sparkles size={10} style={{ display: "inline", transform: "translateY(-1px)" }} aria-hidden="true" />
+              {` ${project.addedBy}`}
             </>
           )}
         </p>
       </div>
 
-      <span
-        className="whitespace-nowrap rounded-md px-2 py-1 text-xs"
-        style={{ background: status.bg, color: status.text }}
-      >
-        {status.label}
+      <span className="status-chip" style={{ background: status.bg, color: status.text }} title={status.label}>
+        <span
+          className={`status-dot${isRunning ? " status-dot--live" : ""}`}
+          style={{ background: status.dot }}
+        />
+        <span className="hide-narrow">{status.label}</span>
       </span>
 
       <div className="flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()}>
         {isDanger ? (
-          <button
+          <motion.button
             onClick={() => {
               select(project.id);
               onOpenDetail();
             }}
-            className="whitespace-nowrap rounded-md px-2.5 py-1.5 text-xs font-medium"
-            style={{ border: "0.5px solid var(--border-danger)", color: "var(--text-danger)", background: "transparent" }}
+            whileTap={{ scale: 0.95 }}
+            className="btn btn--sm btn--danger-outline"
           >
             Fix it
-          </button>
+          </motion.button>
         ) : isStarting ? (
           <IconButton label="Cancel" onClick={() => cancelStart(project.id)}>
             <X size={15} aria-hidden="true" />
           </IconButton>
         ) : isRunning ? (
           <IconButton label="Stop" onClick={() => stop(project.id)}>
-            <Square size={15} aria-hidden="true" />
+            <Square size={14} aria-hidden="true" />
           </IconButton>
         ) : (
           <IconButton label="Start" onClick={() => start(project.id)}>
@@ -145,22 +158,27 @@ export function ProjectRow({
             disabled={!isRunning}
             onClick={() => openUrl(`http://localhost:${project.port}`).catch(() => {})}
           >
-            <ExternalLink size={15} aria-hidden="true" />
+            <ExternalLink size={14} aria-hidden="true" />
           </IconButton>
         )}
 
         {!isDanger && (
-          <IconButton label="Open folder" onClick={() => openPath(project.workingDir).catch(() => {})}>
-            <FolderOpen size={15} aria-hidden="true" />
+          <IconButton
+            label="Open folder"
+            className="hide-narrow"
+            onClick={() => openPath(project.workingDir).catch(() => {})}
+          >
+            <FolderOpen size={14} aria-hidden="true" />
           </IconButton>
         )}
 
         {!isDanger && defaultIde && (
           <IconButton
             label={`Open in ${defaultIde.name}`}
+            className="hide-narrow"
             onClick={() => openInIde(defaultIde.path, project.workingDir).catch(() => {})}
           >
-            <Code2 size={15} aria-hidden="true" />
+            <Code2 size={14} aria-hidden="true" />
           </IconButton>
         )}
 
@@ -169,21 +187,69 @@ export function ProjectRow({
             <MoreHorizontal size={15} aria-hidden="true" />
           </IconButton>
 
-          {menuOpen && (
-            <div
-              className="absolute right-0 top-9 z-10 w-52 rounded-lg p-1"
-              style={{ background: "var(--surface-2)", border: "0.5px solid var(--border-strong)", boxShadow: "0 4px 16px rgba(0,0,0,0.12)" }}
-            >
-              <MenuItem icon={<Pencil size={14} aria-hidden="true" />}>Rename</MenuItem>
-              <MenuItem icon={<Plug size={14} aria-hidden="true" />}>Change port</MenuItem>
-              <MenuItem icon={<Star size={14} aria-hidden="true" />}>Pin to top</MenuItem>
-              <MenuItem icon={<Terminal size={14} aria-hidden="true" />}>Open terminal here</MenuItem>
-              <div className="my-1 h-px" style={{ background: "var(--border)" }} />
-              <MenuItem icon={<Trash2 size={14} aria-hidden="true" />} danger>
-                Remove project
-              </MenuItem>
-            </div>
-          )}
+          <AnimatePresence>
+            {menuOpen && (
+              <motion.div
+                className="menu"
+                initial={{ opacity: 0, scale: 0.95, y: -4 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: -4 }}
+                transition={{ duration: 0.12 }}
+              >
+                <MenuItem
+                  icon={<Pencil size={14} aria-hidden="true" />}
+                  onClick={() => {
+                    setMenuOpen(false);
+                    select(project.id);
+                    onOpenDetail();
+                  }}
+                >
+                  Rename
+                </MenuItem>
+                <MenuItem
+                  icon={<Plug size={14} aria-hidden="true" />}
+                  onClick={() => {
+                    setMenuOpen(false);
+                    select(project.id);
+                    onOpenDetail();
+                  }}
+                >
+                  Change port
+                </MenuItem>
+                <MenuItem
+                  icon={<Star size={14} aria-hidden="true" />}
+                  onClick={() => {
+                    setMenuOpen(false);
+                    togglePin(project.id);
+                  }}
+                >
+                  {project.pinned ? "Unpin" : "Pin to top"}
+                </MenuItem>
+                <MenuItem
+                  icon={<Terminal size={14} aria-hidden="true" />}
+                  onClick={() => {
+                    setMenuOpen(false);
+                    openTerminal(project.workingDir).catch(() => {});
+                  }}
+                >
+                  Open terminal here
+                </MenuItem>
+                <div className="menu-sep" />
+                <MenuItem
+                  icon={<Trash2 size={14} aria-hidden="true" />}
+                  danger
+                  onClick={() => {
+                    setMenuOpen(false);
+                    if (window.confirm(`Remove "${project.name}" from LocalDock? This won't delete any files.`)) {
+                      void removeProject(project.id);
+                    }
+                  }}
+                >
+                  Remove project
+                </MenuItem>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       </div>
     </div>
@@ -195,22 +261,26 @@ function IconButton({
   label,
   onClick,
   disabled,
+  className,
 }: {
   children: React.ReactNode;
   label: string;
   onClick?: () => void;
   disabled?: boolean;
+  className?: string;
 }) {
   return (
-    <button
+    <motion.button
       aria-label={label}
+      title={label}
       onClick={onClick}
       disabled={disabled}
-      className="flex h-8 w-8 items-center justify-center rounded-md p-0 disabled:opacity-40"
-      style={{ background: "transparent", border: "0.5px solid var(--border)", color: "var(--text-secondary)" }}
+      whileHover={disabled ? undefined : { scale: 1.06 }}
+      whileTap={disabled ? undefined : { scale: 0.92 }}
+      className={`icon-btn${className ? ` ${className}` : ""}`}
     >
       {children}
-    </button>
+    </motion.button>
   );
 }
 
@@ -218,16 +288,15 @@ function MenuItem({
   children,
   icon,
   danger,
+  onClick,
 }: {
   children: React.ReactNode;
   icon: React.ReactNode;
   danger?: boolean;
+  onClick?: () => void;
 }) {
   return (
-    <button
-      className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm"
-      style={{ background: "transparent", border: "none", color: danger ? "var(--text-danger)" : "var(--text-primary)" }}
-    >
+    <button onClick={onClick} className={`menu-item${danger ? " menu-item--danger" : ""}`}>
       {icon}
       {children}
     </button>

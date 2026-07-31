@@ -7,16 +7,25 @@ pub struct PortOwner {
     pub name: String,
 }
 
-/// A process actually *listening* on `port` — ignores non-listening
-/// connections (e.g. a lingering TIME_WAIT socket from an unrelated request
-/// that already closed), which would otherwise look like a false conflict.
-fn listening_owner(port: u16) -> Option<PortOwner> {
+/// Every TCP socket currently in LISTEN state — the single definition of
+/// "listening" shared by port-conflict checks here and dev-server discovery
+/// in discover.rs. Ignores non-listening connections (e.g. a lingering
+/// TIME_WAIT socket from a request that already closed), which would
+/// otherwise look like false conflicts / false discoveries.
+pub fn all_tcp_listening() -> Vec<listeners::Listener> {
     listeners::get_all()
-        .ok()?
-        .into_iter()
-        .find(|l| {
-            l.socket.port() == port && l.protocol == listeners::Protocol::TCP && l.state == SocketState::Listen
+        .map(|all| {
+            all.into_iter()
+                .filter(|l| l.protocol == listeners::Protocol::TCP && l.state == SocketState::Listen)
+                .collect()
         })
+        .unwrap_or_default()
+}
+
+fn listening_owner(port: u16) -> Option<PortOwner> {
+    all_tcp_listening()
+        .into_iter()
+        .find(|l| l.socket.port() == port)
         .map(|l| PortOwner { pid: l.process.pid, name: l.process.name })
 }
 

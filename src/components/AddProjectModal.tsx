@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
+import { motion } from "framer-motion";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { X, FolderOpen, Check, Loader2 } from "lucide-react";
@@ -8,13 +9,15 @@ import { useProjectsStore } from "../store/projects";
 
 type Step = "pick" | "scanning" | "confirm";
 
-const inputStyle = {
-  background: "var(--surface-1)",
-  border: "0.5px solid var(--border)",
-  color: "var(--text-primary)",
-} as const;
-
-export function AddProjectModal({ onClose }: { onClose: () => void }) {
+export function AddProjectModal({
+  onClose,
+  seedPath,
+  seedPort,
+}: {
+  onClose: () => void;
+  seedPath?: string;
+  seedPort?: number;
+}) {
   const [step, setStep] = useState<Step>("pick");
   const [dragActive, setDragActive] = useState(false);
   const [result, setResult] = useState<DetectionResult | null>(null);
@@ -73,7 +76,7 @@ export function AddProjectModal({ onClose }: { onClose: () => void }) {
     }
   }
 
-  async function handlePicked(path: string) {
+  async function handlePicked(path: string, portOverride?: number) {
     setFolderPath(path);
     setStep("scanning");
     const detection = await detectProject(path);
@@ -81,9 +84,16 @@ export function AddProjectModal({ onClose }: { onClose: () => void }) {
     setFramework(detection.framework);
     setName(detection.name);
     setCommand(detection.startCommand);
-    setPort(detection.port);
+    // A discovered server's port is the one it's actually observed bound to
+    // right now — more trustworthy than a generic framework default.
+    setPort(portOverride ?? detection.port);
     setStep("confirm");
   }
+
+  useEffect(() => {
+    if (seedPath) void handlePicked(seedPath, seedPort);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const portConflict = projects.some((p) => p.port === port);
 
@@ -99,24 +109,26 @@ export function AddProjectModal({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-6"
-      style={{ background: "rgba(0,0,0,0.45)" }}
+    <motion.div
+      className="overlay items-center justify-center"
+      style={{ padding: 24 }}
       onClick={onClose}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.15 }}
     >
-      <div
-        className="w-full max-w-md rounded-xl p-5"
-        style={{ background: "var(--surface-2)", border: "0.5px solid var(--border)" }}
+      <motion.div
+        className="modal"
         onClick={(e) => e.stopPropagation()}
+        initial={{ opacity: 0, scale: 0.96, y: 8 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.96, y: 8 }}
+        transition={{ duration: 0.18, ease: "easeOut" }}
       >
-        <div className="mb-4 flex items-center justify-between">
+        <div className="flex items-center justify-between" style={{ marginBottom: 16 }}>
           <StepIndicator step={step} />
-          <button
-            aria-label="Close"
-            onClick={onClose}
-            className="rounded-md p-1"
-            style={{ background: "transparent", border: "none", color: "var(--text-muted)" }}
-          >
+          <button aria-label="Close" onClick={onClose} className="icon-btn icon-btn--bare">
             <X size={16} aria-hidden="true" />
           </button>
         </div>
@@ -124,62 +136,44 @@ export function AddProjectModal({ onClose }: { onClose: () => void }) {
         {step === "pick" && (
           <div
             onDragOver={(e) => e.preventDefault()}
-            className="flex flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed px-6 py-10 text-center"
+            className="flex-col items-center justify-center gap-3 text-center"
             style={{
-              borderColor: dragActive ? "var(--border-accent)" : "var(--border-strong)",
+              padding: "40px 24px",
+              borderRadius: "var(--radius)",
+              border: `2px dashed ${dragActive ? "var(--border-accent)" : "var(--border-strong)"}`,
               background: dragActive ? "var(--bg-accent)" : "transparent",
             }}
           >
-            <FolderOpen size={28} style={{ color: "var(--text-muted)" }} aria-hidden="true" />
-            <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
-              Drag a project folder here
-            </p>
-            <button
-              onClick={handleBrowse}
-              className="rounded-lg px-3 py-1.5 text-sm font-medium"
-              style={{ background: "var(--fill-accent)", color: "var(--on-accent)", border: "none" }}
-            >
+            <FolderOpen size={26} className="c-muted" aria-hidden="true" />
+            <p className="t-small c-secondary">Drag a project folder here</p>
+            <button onClick={handleBrowse} className="btn btn--sm btn--primary">
               Browse
             </button>
           </div>
         )}
 
         {step === "scanning" && (
-          <div className="flex flex-col items-center justify-center gap-3 py-10">
-            <Loader2 size={22} className="animate-spin" style={{ color: "var(--text-accent)" }} aria-hidden="true" />
-            <p className="text-sm" style={{ color: "var(--text-secondary)" }}>
-              Looking at your project…
-            </p>
+          <div className="flex-col items-center justify-center gap-3" style={{ padding: "40px 0" }}>
+            <Loader2 size={20} className="spin c-accent" aria-hidden="true" />
+            <p className="t-small c-secondary">Looking at your project…</p>
           </div>
         )}
 
         {step === "confirm" && result && (
           <div>
             {result.detected ? (
-              <div
-                className="mb-4 flex items-center gap-2 rounded-lg px-3 py-2.5"
-                style={{ background: "var(--bg-accent)" }}
-              >
-                <Check size={16} style={{ color: "var(--text-accent)" }} aria-hidden="true" />
-                <span className="text-sm" style={{ color: "var(--text-accent)" }}>
-                  This looks like a {framework} app
-                </span>
+              <div className="notice notice--accent flex items-center gap-2" style={{ marginBottom: 16 }}>
+                <Check size={15} className="c-accent" aria-hidden="true" />
+                <span className="t-small c-accent">This looks like a {framework} app</span>
               </div>
             ) : (
-              <div className="mb-4 rounded-lg px-3 py-2.5" style={{ background: "var(--bg-warning)" }}>
-                <p className="text-sm" style={{ color: "var(--text-warning)" }}>
-                  We're not sure how to start this.
-                </p>
+              <div className="notice notice--warning" style={{ marginBottom: 16 }}>
+                <p className="t-small c-warning">We're not sure how to start this.</p>
               </div>
             )}
 
-            <Field label="Change framework">
-              <select
-                value={framework}
-                onChange={(e) => setFramework(e.target.value)}
-                className="h-9 w-full rounded-lg px-2.5 text-sm"
-                style={inputStyle}
-              >
+            <Field label="Framework">
+              <select value={framework} onChange={(e) => setFramework(e.target.value)} className="field w-full">
                 {FRAMEWORK_OPTIONS.map((f) => (
                   <option key={f} value={f}>
                     {f}
@@ -189,12 +183,7 @@ export function AddProjectModal({ onClose }: { onClose: () => void }) {
             </Field>
 
             <Field label="Display name">
-              <input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                className="h-9 w-full rounded-lg px-2.5 text-sm"
-                style={inputStyle}
-              />
+              <input value={name} onChange={(e) => setName(e.target.value)} className="field w-full" />
             </Field>
 
             {!result.detected && (
@@ -204,8 +193,7 @@ export function AddProjectModal({ onClose }: { onClose: () => void }) {
                   onChange={(e) => setRawFallback(e.target.value)}
                   rows={2}
                   placeholder="npm install && npm run dev"
-                  className="w-full rounded-lg px-2.5 py-2 text-sm"
-                  style={{ ...inputStyle, fontFamily: "var(--font-mono)" }}
+                  className="field field--mono w-full"
                 />
               </Field>
             )}
@@ -214,8 +202,7 @@ export function AddProjectModal({ onClose }: { onClose: () => void }) {
               <input
                 value={command}
                 onChange={(e) => setCommand(e.target.value)}
-                className="h-9 w-full rounded-lg px-2.5 text-sm"
-                style={{ ...inputStyle, fontFamily: "var(--font-mono)" }}
+                className="field field--mono w-full"
               />
             </Field>
 
@@ -225,41 +212,36 @@ export function AddProjectModal({ onClose }: { onClose: () => void }) {
                   type="number"
                   value={port}
                   onChange={(e) => setPort(Number(e.target.value))}
-                  className="h-9 w-24 rounded-lg px-2.5 text-sm"
-                  style={inputStyle}
+                  className="field field--mono"
+                  style={{ width: 96 }}
                 />
                 {portConflict ? (
-                  <span className="text-xs" style={{ color: "var(--text-danger)" }}>
-                    Already used by another project
-                  </span>
+                  <span className="t-micro c-danger">Already used by another project</span>
                 ) : (
-                  <span className="text-xs" style={{ color: "var(--text-success)" }}>
-                    Available
-                  </span>
+                  <span className="t-micro c-success">Available</span>
                 )}
               </div>
             </Field>
 
-            <button
+            <motion.button
               onClick={handleSubmit}
-              className="mt-1 w-full rounded-lg py-2 text-sm font-medium"
-              style={{ background: "var(--fill-accent)", color: "var(--on-accent)", border: "none" }}
+              whileTap={{ scale: 0.97 }}
+              className="btn btn--primary btn--block"
+              style={{ marginTop: 4 }}
             >
               Add project
-            </button>
+            </motion.button>
           </div>
         )}
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="mb-3.5">
-      <label className="mb-1 block text-xs" style={{ color: "var(--text-secondary)" }}>
-        {label}
-      </label>
+    <div style={{ marginBottom: 14 }}>
+      <label className="field-label t-micro c-secondary">{label}</label>
       {children}
     </div>
   );
@@ -268,9 +250,9 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 function StepIndicator({ step }: { step: Step }) {
   const confirmActive = step === "confirm";
   return (
-    <div className="flex items-center gap-1.5 text-xs" style={{ color: "var(--text-secondary)" }}>
+    <div className="flex items-center gap-2 t-eyebrow">
       <Dot active={!confirmActive} label="Detect" />
-      <div className="h-px w-4" style={{ background: "var(--border)" }} />
+      <div style={{ height: 1, width: 16, background: "var(--border)" }} />
       <Dot active={confirmActive} label="Confirm" />
     </div>
   );
@@ -278,10 +260,10 @@ function StepIndicator({ step }: { step: Step }) {
 
 function Dot({ active, label }: { active: boolean; label: string }) {
   return (
-    <span className="flex items-center gap-1.5">
+    <span className="flex items-center gap-1" style={{ color: active ? "var(--text-accent)" : undefined }}>
       <span
-        className="h-1.5 w-1.5 rounded-full"
-        style={{ background: active ? "var(--fill-accent)" : "var(--border-strong)" }}
+        className="status-dot"
+        style={{ width: 6, height: 6, background: active ? "var(--fill-accent-flat)" : "var(--border-strong)" }}
       />
       {label}
     </span>
