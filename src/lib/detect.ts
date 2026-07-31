@@ -112,6 +112,42 @@ async function guessCliDev(folderPath: string, binRelPath: string): Promise<CliD
   }
 }
 
+export interface PackageScript {
+  name: string;
+  /** the script body from package.json — shown as a hint */
+  body: string;
+  /** the full command LocalDock would run, e.g. "pnpm run storybook" */
+  runCommand: string;
+}
+
+async function detectManager(folderPath: string, pkg: Record<string, unknown>): Promise<string> {
+  const packageManagerField = typeof pkg.packageManager === "string" ? pkg.packageManager : "";
+  if (packageManagerField.startsWith("pnpm")) return "pnpm";
+  if (packageManagerField.startsWith("yarn")) return "yarn";
+  if (await pathExists(folderPath, "pnpm-lock.yaml")) return "pnpm";
+  if (await pathExists(folderPath, "yarn.lock")) return "yarn";
+  return "npm";
+}
+
+/** Every script in the project's package.json, ready to run with the right
+ * package manager — or null when there's no package.json at all. */
+export async function listPackageScripts(folderPath: string): Promise<PackageScript[] | null> {
+  if (!(await pathExists(folderPath, "package.json"))) return null;
+  try {
+    const raw = await readTextFile(await join(folderPath, "package.json"));
+    const pkg = JSON.parse(raw) as Record<string, unknown>;
+    const scripts = (pkg.scripts as Record<string, string>) ?? {};
+    const manager = await detectManager(folderPath, pkg);
+    return Object.entries(scripts).map(([name, body]) => ({
+      name,
+      body,
+      runCommand: `${manager} run ${name}`,
+    }));
+  } catch {
+    return null;
+  }
+}
+
 export async function detectProject(folderPath: string): Promise<DetectionResult> {
   const name = (await basename(folderPath).catch(() => "")) || folderPath;
 
@@ -138,16 +174,7 @@ export async function detectProject(folderPath: string): Promise<DetectionResult
     else if (deps["vue"]) framework = "Vue";
     else if (deps["react"]) framework = "React";
 
-    const packageManagerField = typeof pkg.packageManager === "string" ? pkg.packageManager : "";
-    const manager = packageManagerField.startsWith("pnpm")
-      ? "pnpm"
-      : packageManagerField.startsWith("yarn")
-        ? "yarn"
-        : (await pathExists(folderPath, "pnpm-lock.yaml"))
-          ? "pnpm"
-          : (await pathExists(folderPath, "yarn.lock"))
-            ? "yarn"
-            : "npm";
+    const manager = await detectManager(folderPath, pkg);
 
     const port = PORT_DEFAULTS[framework] ?? 3000;
     const script = DEV_SCRIPT_NAMES.find((s) => scripts[s]);

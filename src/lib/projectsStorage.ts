@@ -8,7 +8,7 @@ const PROJECTS_FILE = "projects.json";
 export async function loadProjects(): Promise<Project[]> {
   const parsed = await loadJson<Project[]>(PROJECTS_FILE);
   if (!Array.isArray(parsed)) return [];
-  return parsed.map((p) => ({ ...p, status: "stopped", attentionReason: undefined }));
+  return parsed.map((p) => ({ ...p, status: "stopped", attentionReason: undefined, startedAt: undefined }));
 }
 
 export function saveProjects(projects: Project[]): Promise<void> {

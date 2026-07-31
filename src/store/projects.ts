@@ -33,6 +33,7 @@ interface ProjectsState {
   reconcileWithBackend: () => Promise<void>;
   scanForServers: () => Promise<void>;
   dismissDiscovered: (pid: number) => void;
+  clearLogs: (id: string) => void;
   select: (id: string) => void;
   setSearch: (query: string) => void;
   setSortBy: (key: SortKey) => void;
@@ -73,6 +74,10 @@ function logActivity(
   };
   set((state) => ({ activity: [entry, ...state.activity] }));
 }
+
+// Ring-buffer cap per project. 2000 mono lines render fine without
+// virtualization and cover a typical dev-server session's useful history.
+const LOG_BUFFER_LINES = 2000;
 
 function nextFreePort(projects: Project[], from: number, excludeId: string): number {
   const used = new Set(projects.filter((p) => p.id !== excludeId).map((p) => p.port));
@@ -151,7 +156,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
     const current = get().projects.find((p) => p.id === id);
     if (!current || current.status !== "starting") return;
     set((state) => ({
-      projects: state.projects.map((p) => (p.id === id ? { ...p, status: "running" } : p)),
+      projects: state.projects.map((p) => (p.id === id ? { ...p, status: "running", startedAt: Date.now() } : p)),
     }));
     logActivity(set, id, bound ? "Started successfully" : "Started (couldn't confirm the port yet)");
     if (bound) {
@@ -222,6 +227,10 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
       set((state) => ({ discovered: state.discovered.filter((d) => d.pid !== pid) }));
     },
 
+    clearLogs: (id) => {
+      set((state) => ({ consoleLogs: { ...state.consoleLogs, [id]: [] } }));
+    },
+
     initProcessEvents: () => {
       if (get().eventsInitialized) return;
       set({ eventsInitialized: true });
@@ -229,7 +238,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
       void onProcessLog(({ projectId, line }) => {
         set((state) => {
           const existing = state.consoleLogs[projectId] ?? [];
-          const next = [...existing, line].slice(-300);
+          const next = [...existing, line].slice(-LOG_BUFFER_LINES);
           return { consoleLogs: { ...state.consoleLogs, [projectId]: next } };
         });
       });
@@ -237,7 +246,9 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
       void onProcessExited(({ projectId, code }) => {
         set((state) => ({
           projects: state.projects.map((p) =>
-            p.id === projectId ? { ...p, status: "needs-attention", attentionReason: "crashed" } : p,
+            p.id === projectId
+              ? { ...p, status: "needs-attention", attentionReason: "crashed", startedAt: undefined }
+              : p,
           ),
         }));
         logActivity(set, projectId, `Stopped unexpectedly (exit code ${code ?? "unknown"})`);
@@ -254,7 +265,8 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
           const result = results.find((r) => r.id === p.id);
           if (!result) return p;
           if (result.running && p.status !== "running" && p.status !== "starting") {
-            return { ...p, status: "running", attentionReason: undefined };
+            // Adopted mid-run — uptime counts from adoption, not the real start.
+            return { ...p, status: "running", attentionReason: undefined, startedAt: Date.now() };
           }
           if (!result.running && p.status === "running") {
             return { ...p, status: "stopped" };
@@ -282,7 +294,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
       }
       set((state) => ({
         projects: state.projects.map((p) =>
-          p.id === id ? { ...p, status: "stopped", attentionReason: undefined } : p,
+          p.id === id ? { ...p, status: "stopped", attentionReason: undefined, startedAt: undefined } : p,
         ),
       }));
       logActivity(set, id, "Stopped");

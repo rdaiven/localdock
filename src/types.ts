@@ -19,6 +19,8 @@ export interface Project {
   startCommand: string;
   workingDir: string;
   pinned?: boolean;
+  /** Runtime only — when the current run entered "running". Not meaningful across restarts. */
+  startedAt?: number;
 }
 
 export interface ActivityEntry {

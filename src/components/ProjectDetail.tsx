@@ -1,15 +1,23 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { openPath } from "@tauri-apps/plugin-opener";
-import { X, FolderOpen, Play, Square, ChevronDown, ChevronUp } from "lucide-react";
+import { X, FolderOpen, Play, Square, ChevronDown, ChevronUp, Maximize2 } from "lucide-react";
 import { useProjectsStore } from "../store/projects";
 import { STATUS_CONFIG } from "../lib/status";
 import { RECOVERY_CONFIG } from "../lib/recovery";
-import { FRAMEWORK_OPTIONS } from "../lib/detect";
+import { FRAMEWORK_OPTIONS, listPackageScripts, type PackageScript } from "../lib/detect";
 
 const EMPTY_LOGS: string[] = [];
 
-export function ProjectDetail({ projectId, onClose }: { projectId: string; onClose: () => void }) {
+export function ProjectDetail({
+  projectId,
+  onClose,
+  onOpenLogs,
+}: {
+  projectId: string;
+  onClose: () => void;
+  onOpenLogs: () => void;
+}) {
   const project = useProjectsStore((s) => s.projects.find((p) => p.id === projectId));
   const projects = useProjectsStore((s) => s.projects);
   const activity = useProjectsStore((s) => s.activity);
@@ -29,6 +37,22 @@ export function ProjectDetail({ projectId, onClose }: { projectId: string; onClo
   const [logOpen, setLogOpen] = useState(false);
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [envDraft, setEnvDraft] = useState<Record<string, string>>({ DATABASE_URL: "", API_KEY: "" });
+  const [scripts, setScripts] = useState<PackageScript[] | null>(null);
+
+  const workingDir = project?.workingDir;
+  useEffect(() => {
+    let cancelled = false;
+    if (workingDir) {
+      listPackageScripts(workingDir)
+        .then((s) => {
+          if (!cancelled) setScripts(s);
+        })
+        .catch(() => {});
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [workingDir]);
 
   const projectActivity = useMemo(
     () => activity.filter((a) => a.projectId === projectId),
@@ -96,6 +120,7 @@ export function ProjectDetail({ projectId, onClose }: { projectId: string; onClo
         </div>
         <p className={`t-micro ${isDanger ? "c-danger" : "c-secondary"}`} style={{ paddingLeft: 15, marginBottom: 16 }}>
           {project.framework} · {isDanger ? recovery?.subtitle : status.label}
+          {isRunning && project.startedAt && <Uptime since={project.startedAt} />}
         </p>
 
         {isDanger && recovery && (
@@ -209,6 +234,36 @@ export function ProjectDetail({ projectId, onClose }: { projectId: string; onClo
               className="field field--sm field--mono w-full"
             />
           </Row>
+
+          {scripts && scripts.length > 0 && (
+            <Row label="package.json scripts — click to use as the start command">
+              <div className="flex" style={{ flexWrap: "wrap", gap: 6 }}>
+                {scripts.map((s) => {
+                  const active = project.startCommand === s.runCommand;
+                  return (
+                    <button
+                      key={s.name}
+                      title={s.body}
+                      onClick={() => updateStartCommand(project.id, s.runCommand)}
+                      className="btn btn--sm"
+                      style={
+                        active
+                          ? {
+                              fontFamily: "var(--font-mono)",
+                              borderColor: "var(--border-accent)",
+                              color: "var(--text-accent)",
+                              background: "var(--bg-accent)",
+                            }
+                          : { fontFamily: "var(--font-mono)" }
+                      }
+                    >
+                      {s.name}
+                    </button>
+                  );
+                })}
+              </div>
+            </Row>
+          )}
         </div>
 
         <div className="divider" style={{ marginTop: 18 }}>
@@ -237,14 +292,24 @@ export function ProjectDetail({ projectId, onClose }: { projectId: string; onClo
         </div>
 
         <div className="divider">
-          <button
-            onClick={() => setConsoleOpen((v) => !v)}
-            className="w-full flex items-center justify-between t-eyebrow"
-            style={{ padding: 0 }}
-          >
-            <span>Console · {consoleLines.length}</span>
-            {consoleOpen ? <ChevronUp size={13} aria-hidden="true" /> : <ChevronDown size={13} aria-hidden="true" />}
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setConsoleOpen((v) => !v)}
+              className="grow flex items-center justify-between t-eyebrow"
+              style={{ padding: 0 }}
+            >
+              <span>Console · {consoleLines.length}</span>
+              {consoleOpen ? <ChevronUp size={13} aria-hidden="true" /> : <ChevronDown size={13} aria-hidden="true" />}
+            </button>
+            <button
+              onClick={onOpenLogs}
+              className="icon-btn icon-btn--sm icon-btn--bare shrink-0"
+              aria-label="Open full log viewer"
+              title="Open full log viewer"
+            >
+              <Maximize2 size={12} aria-hidden="true" />
+            </button>
+          </div>
 
           {consoleOpen && (
             <div className="console">
@@ -263,6 +328,18 @@ export function ProjectDetail({ projectId, onClose }: { projectId: string; onClo
       </motion.div>
     </motion.div>
   );
+}
+
+function Uptime({ since }: { since: number }) {
+  const [, forceTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => forceTick((n) => n + 1), 30_000);
+    return () => clearInterval(t);
+  }, []);
+
+  const mins = Math.max(0, Math.floor((Date.now() - since) / 60_000));
+  const label = mins < 1 ? "just started" : mins < 60 ? `up ${mins}m` : `up ${Math.floor(mins / 60)}h ${mins % 60}m`;
+  return <> · {label}</>;
 }
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {

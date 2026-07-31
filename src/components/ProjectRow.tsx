@@ -5,6 +5,7 @@ import {
   FolderOpen,
   ExternalLink,
   Play,
+  ScrollText,
   Square,
   X,
   MoreHorizontal,
@@ -28,10 +29,12 @@ export function ProjectRow({
   project,
   selected,
   onOpenDetail,
+  onOpenLogs,
 }: {
   project: Project;
   selected: boolean;
   onOpenDetail: () => void;
+  onOpenLogs: () => void;
 }) {
   const start = useProjectsStore((s) => s.start);
   const stop = useProjectsStore((s) => s.stop);
@@ -224,6 +227,15 @@ export function ProjectRow({
                   }}
                 >
                   {project.pinned ? "Unpin" : "Pin to top"}
+                </MenuItem>
+                <MenuItem
+                  icon={<ScrollText size={14} aria-hidden="true" />}
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onOpenLogs();
+                  }}
+                >
+                  View logs
                 </MenuItem>
                 <MenuItem
                   icon={<Terminal size={14} aria-hidden="true" />}

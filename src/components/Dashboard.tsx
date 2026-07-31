@@ -6,6 +6,7 @@ import { ProjectRow } from "./ProjectRow";
 import { AddProjectModal } from "./AddProjectModal";
 import { ProjectDetail } from "./ProjectDetail";
 import { DiscoveryBanner } from "./DiscoveryBanner";
+import { LogViewer } from "./LogViewer";
 import { useProjectsStore, visibleProjects } from "../store/projects";
 
 export function Dashboard({ onOpenSettings }: { onOpenSettings: () => void }) {
@@ -15,6 +16,7 @@ export function Dashboard({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [showAddModal, setShowAddModal] = useState(false);
   const [addSeed, setAddSeed] = useState<{ path: string; port: number } | null>(null);
   const [detailProjectId, setDetailProjectId] = useState<string | null>(null);
+  const [logProjectId, setLogProjectId] = useState<string | null>(null);
   const initProcessEvents = useProjectsStore((s) => s.initProcessEvents);
   const loadProjects = useProjectsStore((s) => s.loadProjects);
   const reconcileWithBackend = useProjectsStore((s) => s.reconcileWithBackend);
@@ -67,6 +69,7 @@ export function Dashboard({ onOpenSettings }: { onOpenSettings: () => void }) {
                       project={project}
                       selected={project.id === selectedId}
                       onOpenDetail={() => setDetailProjectId(project.id)}
+                      onOpenLogs={() => setLogProjectId(project.id)}
                     />
                   </motion.div>
                 ))}
@@ -88,8 +91,16 @@ export function Dashboard({ onOpenSettings }: { onOpenSettings: () => void }) {
           />
         )}
         {detailProjectId && (
-          <ProjectDetail projectId={detailProjectId} onClose={() => setDetailProjectId(null)} />
+          <ProjectDetail
+            projectId={detailProjectId}
+            onClose={() => setDetailProjectId(null)}
+            onOpenLogs={() => {
+              setLogProjectId(detailProjectId);
+              setDetailProjectId(null);
+            }}
+          />
         )}
+        {logProjectId && <LogViewer projectId={logProjectId} onClose={() => setLogProjectId(null)} />}
       </AnimatePresence>
     </div>
   );

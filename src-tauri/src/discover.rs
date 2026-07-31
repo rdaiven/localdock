@@ -160,12 +160,19 @@ const IGNORED_PROCESS_NAMES: &[&str] = &[
 
 #[tauri::command]
 pub fn scan_running_dev_servers() -> Vec<DiscoveredServer> {
+    let own_pid = std::process::id();
     let mut seen_pids: std::collections::HashSet<u32> = std::collections::HashSet::new();
     let mut results = Vec::new();
 
     // ports::all_tcp_listening is the shared definition of "listening" —
     // same filter the port-conflict checks use, so the two can't diverge.
     for l in crate::ports::all_tcp_listening() {
+        // Never discover ourselves: LocalDock's own MCP server listens on a
+        // TCP port too, and suggesting it as an addable project (named after
+        // whatever our cwd happens to be) is pure confusion.
+        if l.process.pid == own_pid {
+            continue;
+        }
         if IGNORED_PROCESS_NAMES.contains(&l.process.name.as_str()) {
             continue;
         }
