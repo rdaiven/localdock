@@ -10,12 +10,17 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JobObjectBasicProcessIdList,
-    JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
-    TerminateJobObject, JOBOBJECT_BASIC_PROCESS_ID_LIST, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    AssignProcessToJobObject, CreateJobObjectW, JobObjectBasicAccountingInformation,
+    JobObjectBasicProcessIdList, JobObjectExtendedLimitInformation, QueryInformationJobObject,
+    SetInformationJobObject, TerminateJobObject, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
+    JOBOBJECT_BASIC_PROCESS_ID_LIST, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
-use windows::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject, INFINITE};
+use windows::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+use windows::Win32::System::Threading::{
+    GetExitCodeProcess, OpenProcess, WaitForSingleObject, INFINITE,
+    PROCESS_QUERY_LIMITED_INFORMATION,
+};
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -26,6 +31,9 @@ pub(crate) struct ManagedProcess {
     child: std::process::Child,
     job: SendHandle,
     stopping: Arc<AtomicBool>,
+    /// Kept so a restart can respawn without the caller re-supplying them.
+    command: String,
+    cwd: String,
 }
 
 /// A start that's still spawning — the OS process may not exist yet, but a
@@ -41,8 +49,36 @@ pub(crate) enum Slot {
 
 pub type SharedProcessMap = Arc<Mutex<HashMap<String, Slot>>>;
 
+/// Server-side tail of each project's console output. The GUI keeps its own
+/// (larger) buffer in the frontend store; this one exists so the MCP server
+/// can answer "what did this server print?" without a live window.
+pub type SharedLogBuffer = Arc<Mutex<HashMap<String, std::collections::VecDeque<String>>>>;
+
+const LOG_TAIL_LINES: usize = 500;
+
+fn push_log_line(logs: &SharedLogBuffer, project_id: &str, line: &str) {
+    if let Ok(mut map) = logs.lock() {
+        let buf = map.entry(project_id.to_string()).or_default();
+        if buf.len() == LOG_TAIL_LINES {
+            buf.pop_front();
+        }
+        buf.push_back(line.to_string());
+    }
+}
+
+/// The last `limit` lines this project printed, oldest first.
+pub fn console_tail(logs: &SharedLogBuffer, project_id: &str, limit: usize) -> Vec<String> {
+    let Ok(map) = logs.lock() else {
+        return Vec::new();
+    };
+    match map.get(project_id) {
+        Some(buf) => buf.iter().skip(buf.len().saturating_sub(limit)).cloned().collect(),
+        None => Vec::new(),
+    }
+}
+
 #[derive(Default, Clone)]
-pub struct ProcessManagerState(pub SharedProcessMap);
+pub struct ProcessManagerState(pub SharedProcessMap, pub SharedLogBuffer);
 
 #[derive(Clone, Serialize)]
 struct ProcessLogPayload {
@@ -104,6 +140,69 @@ fn job_process_ids(job: HANDLE) -> Vec<u32> {
     }
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectStats {
+    /// summed working set of every process in the job
+    pub memory_bytes: u64,
+    /// total CPU time (user+kernel) the job has consumed since start, in ms —
+    /// callers diff two samples against wall time to get a live CPU %
+    pub cpu_time_ms: u64,
+    pub process_count: u32,
+}
+
+/// Live resource usage for a running project, read straight off its Job
+/// Object (CPU accounting) and its member processes (working sets).
+#[tauri::command]
+pub fn get_project_stats(
+    state: State<ProcessManagerState>,
+    project_id: String,
+) -> Option<ProjectStats> {
+    let map = state.0.lock().ok()?;
+    let managed = match map.get(&project_id) {
+        Some(Slot::Running(m)) => m,
+        _ => return None,
+    };
+    let job = managed.job.0;
+
+    let mut acct = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
+    unsafe {
+        QueryInformationJobObject(
+            Some(job),
+            JobObjectBasicAccountingInformation,
+            &mut acct as *mut _ as *mut core::ffi::c_void,
+            std::mem::size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
+            None,
+        )
+        .ok()?;
+    }
+    // 100ns units → ms
+    let cpu_time_ms = ((acct.TotalUserTime + acct.TotalKernelTime) as u64) / 10_000;
+
+    let pids = job_process_ids(job);
+    let mut memory_bytes: u64 = 0;
+    for pid in &pids {
+        unsafe {
+            if let Ok(handle) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, *pid) {
+                let mut counters = PROCESS_MEMORY_COUNTERS {
+                    cb: std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
+                    ..Default::default()
+                };
+                if K32GetProcessMemoryInfo(handle, &mut counters, counters.cb).as_bool() {
+                    memory_bytes += counters.WorkingSetSize as u64;
+                }
+                let _ = CloseHandle(handle);
+            }
+        }
+    }
+
+    Some(ProjectStats {
+        memory_bytes,
+        cpu_time_ms,
+        process_count: pids.len() as u32,
+    })
+}
+
 /// True if `port` is currently bound by a process that belongs to the job
 /// object tracking `project_id` (i.e. the process we spawned, or something
 /// it forked) — not just "some process, anywhere, is using this port".
@@ -125,12 +224,18 @@ pub fn port_owned_by_project(state: &SharedProcessMap, project_id: &str, port: u
 pub fn start_process_shared(
     app: &AppHandle,
     state: &SharedProcessMap,
+    logs: &SharedLogBuffer,
     project_id: String,
     command: String,
     cwd: String,
     env: HashMap<String, String>,
 ) -> Result<u32, String> {
     let cancel_requested = Arc::new(AtomicBool::new(false));
+    // A fresh run starts with a clean console — stale output from the previous
+    // run would otherwise look like this run's.
+    if let Ok(mut map) = logs.lock() {
+        map.remove(&project_id);
+    }
 
     {
         let mut map = state.lock().map_err(|e| e.to_string())?;
@@ -223,8 +328,10 @@ pub fn start_process_shared(
     if let Some(stdout) = stdout {
         let app = app.clone();
         let project_id = project_id.clone();
+        let logs = logs.clone();
         std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines().flatten() {
+                push_log_line(&logs, &project_id, &line);
                 let _ = app.emit(
                     "process-log",
                     ProcessLogPayload { project_id: project_id.clone(), stream: "stdout", line },
@@ -236,8 +343,10 @@ pub fn start_process_shared(
     if let Some(stderr) = stderr {
         let app = app.clone();
         let project_id = project_id.clone();
+        let logs = logs.clone();
         std::thread::spawn(move || {
             for line in BufReader::new(stderr).lines().flatten() {
+                push_log_line(&logs, &project_id, &line);
                 let _ = app.emit(
                     "process-log",
                     ProcessLogPayload { project_id: project_id.clone(), stream: "stderr", line },
@@ -291,7 +400,16 @@ pub fn start_process_shared(
             Some(Slot::Pending(p)) if Arc::ptr_eq(&p.cancel_requested, &cancel_requested)
         );
         if still_ours {
-            map.insert(project_id, Slot::Running(ManagedProcess { child, job: SendHandle(job), stopping }));
+            map.insert(
+                project_id,
+                Slot::Running(ManagedProcess {
+                    child,
+                    job: SendHandle(job),
+                    stopping,
+                    command,
+                    cwd,
+                }),
+            );
         } else {
             // Cancelled or superseded while we were spawning — set `stopping`
             // first so the watcher thread above suppresses its exit event.
@@ -305,6 +423,29 @@ pub fn start_process_shared(
     }
 
     Ok(pid)
+}
+
+/// Restart a project using the command and directory it's currently running
+/// with, so the caller doesn't have to re-supply them. `start_process_shared`
+/// already tears down an existing run for the same id, so this is a start.
+pub fn restart_process_shared(
+    app: &AppHandle,
+    state: &SharedProcessMap,
+    logs: &SharedLogBuffer,
+    project_id: String,
+) -> Result<u32, String> {
+    let (command, cwd) = {
+        let map = state.lock().map_err(|e| e.to_string())?;
+        match map.get(&project_id) {
+            Some(Slot::Running(m)) => (m.command.clone(), m.cwd.clone()),
+            _ => {
+                return Err(format!(
+                    "\"{project_id}\" isn't running, so there's no command to reuse — call start_project with a command and directory instead."
+                ))
+            }
+        }
+    };
+    start_process_shared(app, state, logs, project_id, command, cwd, HashMap::new())
 }
 
 pub fn stop_process_shared(state: &SharedProcessMap, project_id: String) -> Result<(), String> {
@@ -355,7 +496,7 @@ pub fn start_process(
     cwd: String,
     env: HashMap<String, String>,
 ) -> Result<u32, String> {
-    start_process_shared(&app, &state.0, project_id, command, cwd, env)
+    start_process_shared(&app, &state.0, &state.1, project_id, command, cwd, env)
 }
 
 #[tauri::command]

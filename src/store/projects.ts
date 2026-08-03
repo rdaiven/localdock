@@ -12,6 +12,10 @@ import {
 } from "../lib/processApi";
 import { loadProjects as loadPersistedProjects, saveProjects } from "../lib/projectsStorage";
 import { scanRunningDevServers, type DiscoveredServer } from "../lib/discoverApi";
+import { onTrayToggleProject, updateTrayMenu } from "../lib/trayApi";
+import { onMcpAddProject } from "../lib/mcpApi";
+import { notify } from "../lib/notify";
+import { detectProject } from "../lib/detect";
 
 function normalizePath(p: string): string {
   return p.trim().toLowerCase().replace(/\\+$/, "");
@@ -53,6 +57,12 @@ interface ProjectsState {
   updateStartCommand: (id: string, command: string) => void;
   renameProject: (id: string, name: string) => void;
   togglePin: (id: string) => void;
+  toggleAutoRestart: (id: string) => void;
+  setGroup: (id: string, group: string) => void;
+  /** Start every stopped project in the group, one at a time in list order —
+   * each waits for the previous one to finish coming up (APIs before frontends). */
+  startGroup: (group: string) => Promise<void>;
+  stopGroup: (group: string) => Promise<void>;
   removeProject: (id: string) => Promise<void>;
   useFreePort: (id: string) => void;
   installAndRetry: (id: string) => Promise<void>;
@@ -88,6 +98,26 @@ function nextFreePort(projects: Project[], from: number, excludeId: string): num
 
 export const useProjectsStore = create<ProjectsState>((set, get) => {
   let loadPromise: Promise<void> | null = null;
+
+  // Crash-restart bookkeeping (runtime only): consecutive failed attempts
+  // per project. Cleared when a start actually reaches "running".
+  const restartAttempts = new Map<string, number>();
+  const MAX_RESTART_ATTEMPTS = 3;
+
+  // Tray-menu sync: pushed whenever names/run-states change, deduped by
+  // signature so state churn doesn't spam IPC.
+  let lastTraySig = "";
+  function syncTrayMenu() {
+    const entries = get().projects.map((p) => ({
+      id: p.id,
+      name: p.name,
+      running: p.status === "running" || p.status === "starting",
+    }));
+    const sig = JSON.stringify(entries);
+    if (sig === lastTraySig) return;
+    lastTraySig = sig;
+    void updateTrayMenu(entries).catch(() => {});
+  }
 
   // Config-shape changes (added/edited projects) are persisted to disk so
   // they survive an app restart — runtime state like status/activity/logs
@@ -155,6 +185,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
 
     const current = get().projects.find((p) => p.id === id);
     if (!current || current.status !== "starting") return;
+    restartAttempts.delete(id);
     set((state) => ({
       projects: state.projects.map((p) => (p.id === id ? { ...p, status: "running", startedAt: Date.now() } : p)),
     }));
@@ -235,6 +266,42 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
       if (get().eventsInitialized) return;
       set({ eventsInitialized: true });
 
+      // Keep the tray's per-project entries current with every state change.
+      useProjectsStore.subscribe(syncTrayMenu);
+      syncTrayMenu();
+
+      void onTrayToggleProject((projectId) => {
+        const p = get().projects.find((x) => x.id === projectId);
+        if (!p) return;
+        if (p.status === "running" || p.status === "starting") void get().stop(projectId);
+        else void performStart(projectId);
+      });
+
+      // An AI assistant called the MCP server's add_project tool. The Rust
+      // side only validated the path exists — detection and the actual
+      // projects.json write happen here, since the frontend owns that file.
+      void onMcpAddProject(async (payload) => {
+        const existing = get().projects.find((p) => normalizePath(p.workingDir) === normalizePath(payload.path));
+        if (existing) {
+          logActivity(set, existing.id, "An assistant tried to add this project again — it's already here");
+          return;
+        }
+        const detected = await detectProject(payload.path).catch(() => null);
+        const project: Project = {
+          id: `${(payload.name ?? detected?.name ?? "project").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "project"}-${Date.now().toString(36)}`,
+          name: payload.name ?? detected?.name ?? "New project",
+          framework: detected?.framework ?? "Custom",
+          port: payload.port ?? detected?.port ?? 3000,
+          status: "stopped",
+          startCommand: payload.command ?? detected?.startCommand ?? "",
+          workingDir: payload.path,
+          addedBy: "an assistant",
+        };
+        set((state) => ({ projects: [...state.projects, project] }));
+        logActivity(set, project.id, "Added by an assistant via MCP");
+        persist();
+      });
+
       void onProcessLog(({ projectId, line }) => {
         set((state) => {
           const existing = state.consoleLogs[projectId] ?? [];
@@ -252,6 +319,29 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
           ),
         }));
         logActivity(set, projectId, `Stopped unexpectedly (exit code ${code ?? "unknown"})`);
+
+        // Auto-restart, if the project opted in: backoff 1s → 3s → 9s, then
+        // give up and stay in the crashed state for the user to look at.
+        const project = get().projects.find((p) => p.id === projectId);
+        if (!project?.autoRestart) {
+          if (project) void notify(`${project.name} stopped unexpectedly`);
+          return;
+        }
+        const attempt = restartAttempts.get(projectId) ?? 0;
+        if (attempt >= MAX_RESTART_ATTEMPTS) {
+          logActivity(set, projectId, `Auto-restart gave up after ${MAX_RESTART_ATTEMPTS} attempts`);
+          void notify(`${project.name} keeps crashing — auto-restart gave up`);
+          restartAttempts.delete(projectId);
+          return;
+        }
+        restartAttempts.set(projectId, attempt + 1);
+        const delayMs = 1000 * 3 ** attempt;
+        logActivity(set, projectId, `Auto-restarting in ${delayMs / 1000}s (attempt ${attempt + 1}/${MAX_RESTART_ATTEMPTS})`);
+        setTimeout(() => {
+          const p = get().projects.find((x) => x.id === projectId);
+          // still crashed and still opted in — the user may have intervened meanwhile
+          if (p?.attentionReason === "crashed" && p.autoRestart) void performStart(projectId);
+        }, delayMs);
       });
     },
 
@@ -352,6 +442,39 @@ export const useProjectsStore = create<ProjectsState>((set, get) => {
         projects: state.projects.map((p) => (p.id === id ? { ...p, pinned: !p.pinned } : p)),
       }));
       persist();
+    },
+
+    toggleAutoRestart: (id) => {
+      set((state) => ({
+        projects: state.projects.map((p) => (p.id === id ? { ...p, autoRestart: !p.autoRestart } : p)),
+      }));
+      persist();
+    },
+
+    setGroup: (id, group) => {
+      const trimmed = group.trim();
+      set((state) => ({
+        projects: state.projects.map((p) => (p.id === id ? { ...p, group: trimmed || undefined } : p)),
+      }));
+      persist();
+    },
+
+    startGroup: async (group) => {
+      // Sequential on purpose: performStart resolves once the project is
+      // running (or failed), so list order doubles as startup order.
+      const ids = get()
+        .projects.filter((p) => p.group === group && (p.status === "stopped" || p.attentionReason === "crashed"))
+        .map((p) => p.id);
+      for (const id of ids) {
+        await performStart(id);
+      }
+    },
+
+    stopGroup: async (group) => {
+      const ids = get()
+        .projects.filter((p) => p.group === group && (p.status === "running" || p.status === "starting"))
+        .map((p) => p.id);
+      await Promise.all(ids.map((id) => get().stop(id)));
     },
 
     removeProject: async (id) => {

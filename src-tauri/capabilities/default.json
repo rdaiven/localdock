@@ -8,6 +8,7 @@
     "opener:default",
     "dialog:default",
     "autostart:default",
+    "notification:default",
     {
       "identifier": "fs:allow-read-text-file",
       "allow": [{ "path": "**" }]

@@ -48,6 +48,17 @@ export async function portBelongsToProject(projectId: string, port: number): Pro
   return invoke<boolean>("port_belongs_to_project", { projectId, port });
 }
 
+export interface ProjectStats {
+  memoryBytes: number;
+  /** total CPU ms the job has consumed — diff two samples for a live % */
+  cpuTimeMs: number;
+  processCount: number;
+}
+
+export async function getProjectStats(projectId: string): Promise<ProjectStats | null> {
+  return invoke<ProjectStats | null>("get_project_stats", { projectId });
+}
+
 export function onProcessLog(callback: (event: ProcessLogEvent) => void): Promise<UnlistenFn> {
   return listen<ProcessLogEvent>("process-log", (e) => callback(e.payload));
 }

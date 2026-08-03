@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import { Play, Square } from "lucide-react";
+import type { Project } from "../types";
 import { Rail } from "./Rail";
 import { TopBar } from "./TopBar";
 import { ProjectRow } from "./ProjectRow";
@@ -54,27 +56,12 @@ export function Dashboard({ onOpenSettings }: { onOpenSettings: () => void }) {
               </p>
             </div>
           ) : (
-            <div className="flex-col gap-2">
-              <AnimatePresence initial={false}>
-                {projects.map((project) => (
-                  <motion.div
-                    key={project.id}
-                    layout
-                    initial={{ opacity: 0, y: -6 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, scale: 0.98 }}
-                    transition={{ duration: 0.15 }}
-                  >
-                    <ProjectRow
-                      project={project}
-                      selected={project.id === selectedId}
-                      onOpenDetail={() => setDetailProjectId(project.id)}
-                      onOpenLogs={() => setLogProjectId(project.id)}
-                    />
-                  </motion.div>
-                ))}
-              </AnimatePresence>
-            </div>
+            <GroupedList
+              projects={projects}
+              selectedId={selectedId}
+              onOpenDetail={setDetailProjectId}
+              onOpenLogs={setLogProjectId}
+            />
           )}
         </div>
       </div>
@@ -102,6 +89,98 @@ export function Dashboard({ onOpenSettings }: { onOpenSettings: () => void }) {
         )}
         {logProjectId && <LogViewer projectId={logProjectId} onClose={() => setLogProjectId(null)} />}
       </AnimatePresence>
+    </div>
+  );
+}
+
+function GroupedList({
+  projects,
+  selectedId,
+  onOpenDetail,
+  onOpenLogs,
+}: {
+  projects: Project[];
+  selectedId: string | null;
+  onOpenDetail: (id: string) => void;
+  onOpenLogs: (id: string) => void;
+}) {
+  const sections = new Map<string, Project[]>();
+  for (const p of projects) {
+    const key = p.group ?? "";
+    if (!sections.has(key)) sections.set(key, []);
+    sections.get(key)!.push(p);
+  }
+  const named = [...sections.keys()].filter((k) => k !== "").sort();
+  const ungrouped = sections.get("") ?? [];
+
+  const renderRows = (items: Project[]) =>
+    items.map((project) => (
+      <motion.div
+        key={project.id}
+        layout
+        initial={{ opacity: 0, y: -6 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.98 }}
+        transition={{ duration: 0.15 }}
+      >
+        <ProjectRow
+          project={project}
+          selected={project.id === selectedId}
+          onOpenDetail={() => onOpenDetail(project.id)}
+          onOpenLogs={() => onOpenLogs(project.id)}
+        />
+      </motion.div>
+    ));
+
+  return (
+    <div className="flex-col gap-2">
+      <AnimatePresence initial={false}>
+        {named.map((name) => (
+          <motion.div key={`grp:${name}`} layout className="flex-col gap-2">
+            <GroupHeader name={name} items={sections.get(name)!} />
+            {renderRows(sections.get(name)!)}
+          </motion.div>
+        ))}
+        {ungrouped.length > 0 && named.length > 0 && (
+          <motion.p key="hdr:ungrouped" layout className="t-eyebrow" style={{ marginTop: 8 }}>
+            Ungrouped
+          </motion.p>
+        )}
+        {renderRows(ungrouped)}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function GroupHeader({ name, items }: { name: string; items: Project[] }) {
+  const startGroup = useProjectsStore((s) => s.startGroup);
+  const stopGroup = useProjectsStore((s) => s.stopGroup);
+  const runningCount = items.filter((p) => p.status === "running" || p.status === "starting").length;
+  const anyStartable = items.some((p) => p.status === "stopped" || p.attentionReason === "crashed");
+
+  return (
+    <div className="flex items-center gap-2" style={{ marginTop: 8 }}>
+      <p className="t-eyebrow grow">
+        {name} · {runningCount}/{items.length} running
+      </p>
+      <button
+        className="btn btn--sm"
+        disabled={!anyStartable}
+        onClick={() => void startGroup(name)}
+        title="Start every stopped project in this group, in order"
+      >
+        <Play size={11} aria-hidden="true" />
+        Start all
+      </button>
+      <button
+        className="btn btn--sm"
+        disabled={runningCount === 0}
+        onClick={() => void stopGroup(name)}
+        title="Stop every running project in this group"
+      >
+        <Square size={10} aria-hidden="true" />
+        Stop all
+      </button>
     </div>
   );
 }

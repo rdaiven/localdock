@@ -19,6 +19,10 @@ export interface Project {
   startCommand: string;
   workingDir: string;
   pinned?: boolean;
+  /** Free-text stack name — projects sharing a group get start-all/stop-all. */
+  group?: string;
+  /** Restart automatically (with backoff, max 3 tries) when the process crashes. */
+  autoRestart?: boolean;
   /** Runtime only — when the current run entered "running". Not meaningful across restarts. */
   startedAt?: number;
 }

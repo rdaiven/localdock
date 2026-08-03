@@ -3,6 +3,7 @@ mod ide;
 mod mcp_server;
 mod ports;
 mod process_manager;
+mod project_store;
 mod tray;
 
 use process_manager::ProcessManagerState;
@@ -26,6 +27,7 @@ fn quit_app(app: tauri::AppHandle) {
 pub fn run() {
     let process_state = ProcessManagerState::default();
     let shared_map = process_state.0.clone();
+    let shared_logs = process_state.1.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -35,9 +37,10 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        .plugin(tauri_plugin_notification::init())
         .manage(process_state)
         .setup(move |app| {
-            mcp_server::spawn_mcp_server(app.handle().clone(), shared_map.clone());
+            mcp_server::spawn_mcp_server(app.handle().clone(), shared_map.clone(), shared_logs.clone());
             tray::setup_tray(app.handle())?;
             if !tray::should_start_minimized(app.handle()) {
                 if let Some(window) = app.get_webview_window("main") {
@@ -68,11 +71,13 @@ pub fn run() {
             process_manager::is_process_running,
             process_manager::list_running_processes,
             process_manager::port_belongs_to_project,
+            process_manager::get_project_stats,
             ports::check_port,
             ide::detect_ides,
             ide::open_in_ide,
             ide::open_terminal,
             discover::scan_running_dev_servers,
+            tray::update_tray_menu,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

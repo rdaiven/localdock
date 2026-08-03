@@ -1,8 +1,10 @@
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Manager,
+    AppHandle, Emitter, Manager, Wry,
 };
+
+const TRAY_ID: &str = "main";
 
 /// The slice of settings.json this side of the app reads. The file's schema
 /// is OWNED by the frontend (src/lib/settingsApi.ts, PersistedSettings) —
@@ -48,19 +50,61 @@ pub fn should_close_to_tray(app: &AppHandle) -> bool {
     read_settings(app).close_to_tray
 }
 
-pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
-    let open_item = MenuItem::with_id(app, "open", "Open LocalDock", true, None::<&str>)?;
-    let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open_item, &quit_item])?;
+/// One project's line in the tray menu, pushed from the frontend (which
+/// owns the project list) whenever names or run-states change.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrayProjectEntry {
+    pub id: String,
+    pub name: String,
+    pub running: bool,
+}
 
-    let mut builder = TrayIconBuilder::new()
+fn build_menu(app: &AppHandle, projects: &[TrayProjectEntry]) -> tauri::Result<Menu<Wry>> {
+    let menu = Menu::new(app)?;
+    // cap the list so a huge dock doesn't produce a comical tray menu
+    for p in projects.iter().take(12) {
+        let label = if p.running {
+            format!("■  Stop {}", p.name)
+        } else {
+            format!("▶  Start {}", p.name)
+        };
+        menu.append(&MenuItem::with_id(app, format!("toggle:{}", p.id), label, true, None::<&str>)?)?;
+    }
+    if !projects.is_empty() {
+        menu.append(&PredefinedMenuItem::separator(app)?)?;
+    }
+    menu.append(&MenuItem::with_id(app, "open", "Open LocalDock", true, None::<&str>)?)?;
+    menu.append(&MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?)?;
+    Ok(menu)
+}
+
+/// Replace the tray menu with fresh per-project start/stop entries.
+#[tauri::command]
+pub fn update_tray_menu(app: AppHandle, projects: Vec<TrayProjectEntry>) -> Result<(), String> {
+    let Some(tray) = app.tray_by_id(TRAY_ID) else {
+        return Ok(()); // tray failed to initialize — nothing to update
+    };
+    let menu = build_menu(&app, &projects).map_err(|e| e.to_string())?;
+    tray.set_menu(Some(menu)).map_err(|e| e.to_string())
+}
+
+pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
+    let menu = build_menu(app, &[])?;
+
+    let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .tooltip("LocalDock")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "open" => show_main_window(app),
             "quit" => app.exit(0),
-            _ => {}
+            other => {
+                if let Some(project_id) = other.strip_prefix("toggle:") {
+                    // The frontend owns start/stop logic — hand it the id.
+                    let _ = app.emit("tray-toggle-project", project_id.to_string());
+                }
+            }
         })
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {

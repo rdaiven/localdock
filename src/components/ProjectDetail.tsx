@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { X, FolderOpen, Play, Square, ChevronDown, ChevronUp, Maximize2 } from "lucide-react";
@@ -6,6 +6,7 @@ import { useProjectsStore } from "../store/projects";
 import { STATUS_CONFIG } from "../lib/status";
 import { RECOVERY_CONFIG } from "../lib/recovery";
 import { FRAMEWORK_OPTIONS, listPackageScripts, type PackageScript } from "../lib/detect";
+import { getProjectStats } from "../lib/processApi";
 
 const EMPTY_LOGS: string[] = [];
 
@@ -28,6 +29,8 @@ export function ProjectDetail({
   const updateFramework = useProjectsStore((s) => s.updateFramework);
   const updateStartCommand = useProjectsStore((s) => s.updateStartCommand);
   const renameProject = useProjectsStore((s) => s.renameProject);
+  const toggleAutoRestart = useProjectsStore((s) => s.toggleAutoRestart);
+  const setGroup = useProjectsStore((s) => s.setGroup);
   const useFreePort = useProjectsStore((s) => s.useFreePort);
   const installAndRetry = useProjectsStore((s) => s.installAndRetry);
   const retryWithCommand = useProjectsStore((s) => s.retryWithCommand);
@@ -159,12 +162,14 @@ export function ProjectDetail({
             disabled={isStarting}
             whileTap={{ scale: 0.97 }}
             className="btn btn--primary btn--block"
-            style={{ marginBottom: 16 }}
+            style={{ marginBottom: isRunning ? 8 : 16 }}
           >
             {isRunning ? <Square size={14} aria-hidden="true" /> : <Play size={14} aria-hidden="true" />}
             {isRunning ? "Stop" : isStarting ? "Starting…" : "Start"}
           </motion.button>
         )}
+
+        {isRunning && <ResourceStats projectId={project.id} />}
 
         <p className="t-eyebrow divider" style={{ marginBottom: 10 }}>
           Configuration
@@ -234,6 +239,36 @@ export function ProjectDetail({
               className="field field--sm field--mono w-full"
             />
           </Row>
+
+          <Row label="Group — projects in the same group start and stop together">
+            <input
+              value={project.group ?? ""}
+              onChange={(e) => setGroup(project.id, e.target.value)}
+              placeholder="e.g. my-stack"
+              list="group-suggestions"
+              className="field field--sm w-full"
+            />
+            <datalist id="group-suggestions">
+              {[...new Set(projects.map((p) => p.group).filter(Boolean))].map((g) => (
+                <option key={g} value={g} />
+              ))}
+            </datalist>
+          </Row>
+
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="t-micro c-secondary">Auto-restart on crash</p>
+              <p className="t-micro c-muted">Up to 3 tries with backoff, then it stays down.</p>
+            </div>
+            <button
+              role="switch"
+              aria-checked={!!project.autoRestart}
+              onClick={() => toggleAutoRestart(project.id)}
+              className="switch"
+            >
+              <span className="switch-thumb" />
+            </button>
+          </div>
 
           {scripts && scripts.length > 0 && (
             <Row label="package.json scripts — click to use as the start command">
@@ -327,6 +362,49 @@ export function ProjectDetail({
         </div>
       </motion.div>
     </motion.div>
+  );
+}
+
+function ResourceStats({ projectId }: { projectId: string }) {
+  const [display, setDisplay] = useState<{ cpu: number; memMb: number; procs: number } | null>(null);
+  const prevRef = useRef<{ cpuTimeMs: number; at: number } | null>(null);
+
+  useEffect(() => {
+    prevRef.current = null;
+    setDisplay(null);
+    let cancelled = false;
+
+    async function sample() {
+      const stats = await getProjectStats(projectId).catch(() => null);
+      if (cancelled || !stats) return;
+      const now = Date.now();
+      const prev = prevRef.current;
+      prevRef.current = { cpuTimeMs: stats.cpuTimeMs, at: now };
+      if (!prev) return; // need two samples for a rate
+      const wallMs = now - prev.at;
+      const cores = navigator.hardwareConcurrency || 1;
+      const cpu = wallMs > 0 ? Math.max(0, ((stats.cpuTimeMs - prev.cpuTimeMs) / wallMs) * (100 / cores)) : 0;
+      setDisplay({
+        cpu: Math.min(100, cpu),
+        memMb: stats.memoryBytes / (1024 * 1024),
+        procs: stats.processCount,
+      });
+    }
+
+    void sample();
+    const t = setInterval(sample, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [projectId]);
+
+  return (
+    <p className="t-mono c-muted text-center" style={{ fontSize: 11, marginBottom: 16, minHeight: 16 }}>
+      {display
+        ? `cpu ${display.cpu.toFixed(1)}% · ram ${display.memMb.toFixed(0)} MB · ${display.procs} ${display.procs === 1 ? "proc" : "procs"}`
+        : "measuring…"}
+    </p>
   );
 }
 
