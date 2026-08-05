@@ -5,9 +5,13 @@ All notable changes to LocalDock are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-08-05
+
 ### Added
 - Auto-updates: LocalDock checks GitHub Releases for a newer signed build
   and can install it in place from Settings → Updates.
+- Release notes are now pulled from this changelog instead of a static
+  message.
 
 ### Changed
 - Reworked the README with a clearer feature breakdown and a full MCP tool
@@ -38,6 +42,7 @@ Initial public release: start/stop/monitor local dev servers from one
 dashboard, with system tray support, dev-server discovery, and an MCP
 server for AI assistants.
 
-[Unreleased]: https://github.com/rdaiven/localdock/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/rdaiven/localdock/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/rdaiven/localdock/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/rdaiven/localdock/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/rdaiven/localdock/releases/tag/v0.1.0
