@@ -17,11 +17,17 @@ dist-ssr
 !.vscode/extensions.json
 .idea
 .DS_Store
+Thumbs.db
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
+
+# Secrets / local env overrides — never meant to leave this machine
+.env
+.env.local
+.env.*.local
 
 # Internal dev tooling / notes — not part of the public project
 .claude/
