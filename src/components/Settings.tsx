@@ -1,7 +1,8 @@
-import { useState } from "react";
-import { ArrowLeft, Sun, Moon, Laptop, Sparkles, Copy, Check, Power } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ArrowLeft, Sun, Moon, Laptop, Sparkles, Copy, Check, Power, RefreshCw, Download } from "lucide-react";
 import { useSettingsStore } from "../store/settings";
 import { quitApp } from "../lib/settingsApi";
+import { currentVersion, checkForUpdate, installUpdate, type Update } from "../lib/updateApi";
 
 const MCP_URL = "http://127.0.0.1:7420/mcp";
 const MCP_SNIPPET = JSON.stringify({ mcpServers: { localdock: { url: MCP_URL } } }, null, 2);
@@ -19,6 +20,45 @@ export function Settings({ onBack }: { onBack: () => void }) {
   const closeToTray = useSettingsStore((s) => s.closeToTray);
   const setCloseToTray = useSettingsStore((s) => s.setCloseToTray);
   const [copied, setCopied] = useState(false);
+
+  const [appVersion, setAppVersion] = useState<string | null>(null);
+  const [update, setUpdate] = useState<Update | null>(null);
+  const [updateStatus, setUpdateStatus] = useState<"idle" | "checking" | "up-to-date" | "available" | "installing" | "error">("idle");
+  const [updateError, setUpdateError] = useState<string | null>(null);
+
+  useEffect(() => {
+    currentVersion().then(setAppVersion).catch(() => {});
+  }, []);
+
+  async function handleCheckForUpdate() {
+    setUpdateStatus("checking");
+    setUpdateError(null);
+    try {
+      const found = await checkForUpdate();
+      if (found) {
+        setUpdate(found);
+        setUpdateStatus("available");
+      } else {
+        setUpdate(null);
+        setUpdateStatus("up-to-date");
+      }
+    } catch (err) {
+      setUpdateStatus("error");
+      setUpdateError(String(err));
+    }
+  }
+
+  async function handleInstallUpdate() {
+    if (!update) return;
+    setUpdateStatus("installing");
+    setUpdateError(null);
+    try {
+      await installUpdate(update);
+    } catch (err) {
+      setUpdateStatus("error");
+      setUpdateError(String(err));
+    }
+  }
 
   function copySnippet() {
     navigator.clipboard.writeText(MCP_SNIPPET).then(() => {
@@ -84,6 +124,39 @@ export function Settings({ onBack }: { onBack: () => void }) {
           <Field label="Start minimized to tray">
             <Switch checked={startMinimized} onChange={setStartMinimized} />
           </Field>
+        </Section>
+
+        <Section title="Updates">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <p className="t-small c-primary" style={{ marginBottom: 4 }}>
+                Version {appVersion ?? "…"}
+              </p>
+              <p className="t-micro c-muted">
+                {updateStatus === "idle" && "Check GitHub for a newer release."}
+                {updateStatus === "checking" && "Checking for updates…"}
+                {updateStatus === "up-to-date" && "You're on the latest version."}
+                {updateStatus === "available" && update && `Version ${update.version} is available.`}
+                {updateStatus === "installing" && "Downloading and installing — LocalDock will restart."}
+                {updateStatus === "error" && (updateError ?? "Couldn't check for updates.")}
+              </p>
+            </div>
+            {updateStatus === "available" ? (
+              <button onClick={handleInstallUpdate} className="btn btn--sm btn--primary shrink-0">
+                <Download size={12} aria-hidden="true" />
+                Install & restart
+              </button>
+            ) : (
+              <button
+                onClick={handleCheckForUpdate}
+                disabled={updateStatus === "checking" || updateStatus === "installing"}
+                className="btn btn--sm shrink-0"
+              >
+                <RefreshCw size={12} aria-hidden="true" />
+                Check for updates
+              </button>
+            )}
+          </div>
         </Section>
 
         <Section title="AI & MCP">

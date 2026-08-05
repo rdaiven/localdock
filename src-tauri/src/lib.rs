@@ -38,6 +38,8 @@ pub fn run() {
             None,
         ))
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(process_state)
         .setup(move |app| {
             mcp_server::spawn_mcp_server(app.handle().clone(), shared_map.clone(), shared_logs.clone());

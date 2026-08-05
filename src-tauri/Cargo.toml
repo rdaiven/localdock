@@ -31,6 +31,8 @@ tauri-plugin-notification = "2"
 rmcp = { version = "2.2.0", features = ["server", "transport-streamable-http-server", "schemars"] }
 axum = "0.8.9"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros"] }
+tauri-plugin-updater = "2.10.1"
+tauri-plugin-process = "2.3.1"
 
 [profile.release]
 lto = true

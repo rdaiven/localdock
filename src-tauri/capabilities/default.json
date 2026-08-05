@@ -9,6 +9,8 @@
     "dialog:default",
     "autostart:default",
     "notification:default",
+    "updater:default",
+    "process:allow-restart",
     {
       "identifier": "fs:allow-read-text-file",
       "allow": [{ "path": "**" }]
